@@ -1,0 +1,46 @@
+{
+  "default": {
+    "font": "Arial",
+    "fontsize": 72,
+    "fontcolor": "white",
+    "borderw": 3,
+    "bordercolor": "black",
+    "duration_sec": 3,
+    "width": 1920,
+    "height": 1080,
+    "bg_color": "black"
+  },
+  "minimal": {
+    "font": "Helvetica",
+    "fontsize": 56,
+    "fontcolor": "white",
+    "borderw": 0,
+    "bordercolor": "black",
+    "duration_sec": 2,
+    "width": 1920,
+    "height": 1080,
+    "bg_color": "#1a1a1a"
+  },
+  "bold": {
+    "font": "Arial Black",
+    "fontsize": 96,
+    "fontcolor": "yellow",
+    "borderw": 4,
+    "bordercolor": "black",
+    "duration_sec": 4,
+    "width": 1920,
+    "height": 1080,
+    "bg_color": "#0a0a2e"
+  },
+  "subtitle": {
+    "font": "Arial",
+    "fontsize": 48,
+    "fontcolor": "white",
+    "borderw": 2,
+    "bordercolor": "#333333",
+    "duration_sec": 3,
+    "width": 1920,
+    "height": 1080,
+    "bg_color": "#222222"
+  }
+}

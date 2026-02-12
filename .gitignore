@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+autoeditor_config.json
+*.log
+generated_titles/
