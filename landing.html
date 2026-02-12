@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoEditor — автомонтаж видео для DaVinci Resolve</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #253349;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --accent: #6366f1;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --text-dim: #64748b;
+            --border: #334155;
+            --success: #22c55e;
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* ── Navbar ── */
+        .navbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .navbar-brand {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .navbar-brand i {
+            color: var(--primary);
+            font-size: 22px;
+        }
+
+        .navbar-links {
+            display: flex;
+            gap: 32px;
+            list-style: none;
+        }
+
+        .navbar-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+
+        .navbar-links a:hover {
+            color: var(--text);
+        }
+
+        .navbar-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--primary);
+            color: #fff;
+            padding: 8px 20px;
+            border-radius: var(--radius-sm);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        .navbar-cta:hover {
+            background: var(--primary-hover);
+        }
+
+        .mobile-toggle {
+            display: none;
+            background: none;
+            border: none;
+            color: var(--text);
+            font-size: 22px;
+            cursor: pointer;
+        }
+
+        /* ── Container ── */
+        .container {
+            max-width: 1140px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* ── Hero ── */
+        .hero {
+            padding: 160px 0 100px;
+            text-align: center;
+            position: relative;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 100px;
+            padding: 6px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #a5b4fc;
+            margin-bottom: 28px;
+        }
+
+        .hero h1 {
+            font-size: clamp(40px, 6vw, 64px);
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 20px;
+            letter-spacing: -0.02em;
+        }
+
+        .hero h1 span {
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-sub {
+            font-size: 18px;
+            color: var(--text-muted);
+            max-width: 580px;
+            margin: 0 auto 40px;
+            line-height: 1.7;
+        }
+
+        .hero-actions {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        .btn-primary {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: #fff;
+            padding: 14px 32px;
+            border-radius: var(--radius);
+            font-size: 16px;
+            font-weight: 600;
+            text-decoration: none;
+            border: none;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 24px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(59, 130, 246, 0.4);
+        }
+
+        .btn-secondary {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--bg-card);
+            color: var(--text);
+            padding: 14px 32px;
+            border-radius: var(--radius);
+            font-size: 16px;
+            font-weight: 600;
+            text-decoration: none;
+            border: 1px solid var(--border);
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--text-dim);
+        }
+
+        .hero-meta {
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+
+        .hero-meta span {
+            margin: 0 6px;
+        }
+
+        /* ── Section common ── */
+        .section {
+            padding: 100px 0;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+
+        .section-header h2 {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            letter-spacing: -0.01em;
+        }
+
+        .section-header p {
+            color: var(--text-muted);
+            font-size: 16px;
+            max-width: 540px;
+            margin: 0 auto;
+        }
+
+        /* ── Features grid ── */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 28px;
+            transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--accent);
+            box-shadow: 0 8px 32px rgba(99, 102, 241, 0.1);
+        }
+
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            margin-bottom: 16px;
+            background: rgba(59, 130, 246, 0.12);
+            color: var(--primary);
+        }
+
+        .feature-card:nth-child(even) .feature-icon {
+            background: rgba(99, 102, 241, 0.12);
+            color: var(--accent);
+        }
+
+        .feature-step {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-dim);
+            margin-bottom: 8px;
+        }
+
+        .feature-card h3 {
+            font-size: 17px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .feature-card p {
+            font-size: 14px;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        /* ── How it works ── */
+        .how-steps {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 0;
+            position: relative;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .how-step {
+            flex: 1;
+            text-align: center;
+            position: relative;
+            padding: 0 20px;
+        }
+
+        .how-step-num {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: #fff;
+            font-size: 22px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            position: relative;
+            z-index: 2;
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+        }
+
+        .how-step:not(:last-child)::after {
+            content: '';
+            position: absolute;
+            top: 28px;
+            left: calc(50% + 28px);
+            right: calc(-50% + 28px);
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary), var(--accent));
+            z-index: 1;
+            opacity: 0.4;
+        }
+
+        .how-step h3 {
+            font-size: 17px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .how-step p {
+            font-size: 14px;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        /* ── Requirements ── */
+        .req-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 20px;
+        }
+
+        .req-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            text-align: center;
+        }
+
+        .req-card i {
+            font-size: 28px;
+            color: var(--primary);
+            margin-bottom: 14px;
+        }
+
+        .req-card h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .req-card p {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        /* ── Install tabs ── */
+        .install-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+
+        .install-tab {
+            padding: 10px 24px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 14px;
+            font-weight: 500;
+            font-family: inherit;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .install-tab:hover {
+            border-color: var(--text-dim);
+            color: var(--text);
+        }
+
+        .install-tab.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+        }
+
+        .install-panel {
+            display: none;
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .install-panel.active {
+            display: block;
+        }
+
+        .code-block {
+            background: #0b1120;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            position: relative;
+            margin-bottom: 16px;
+            overflow-x: auto;
+        }
+
+        .code-block code {
+            font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+            font-size: 13px;
+            line-height: 1.7;
+            color: #e2e8f0;
+            white-space: pre;
+        }
+
+        .code-block .comment {
+            color: var(--text-dim);
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-muted);
+            padding: 6px 12px;
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            border-color: var(--primary);
+            color: var(--text);
+        }
+
+        .copy-btn.copied {
+            border-color: var(--success);
+            color: var(--success);
+        }
+
+        .install-note {
+            font-size: 13px;
+            color: var(--text-dim);
+            text-align: center;
+            margin-top: 12px;
+        }
+
+        .install-note code {
+            background: rgba(59, 130, 246, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: var(--primary);
+        }
+
+        /* ── Footer ── */
+        .footer {
+            border-top: 1px solid var(--border);
+            padding: 60px 0 40px;
+            text-align: center;
+        }
+
+        .footer-cta {
+            margin-bottom: 40px;
+        }
+
+        .footer-cta h2 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+
+        .footer-cta p {
+            color: var(--text-muted);
+            margin-bottom: 24px;
+            font-size: 15px;
+        }
+
+        .footer-bottom {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .footer-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: var(--text);
+        }
+
+        /* ── Mobile ── */
+        @media (max-width: 768px) {
+            .navbar-links {
+                display: none;
+                position: absolute;
+                top: 64px;
+                left: 0;
+                right: 0;
+                background: rgba(15, 23, 42, 0.95);
+                backdrop-filter: blur(12px);
+                flex-direction: column;
+                padding: 16px 24px;
+                gap: 12px;
+                border-bottom: 1px solid var(--border);
+            }
+
+            .navbar-links.open {
+                display: flex;
+            }
+
+            .navbar-cta {
+                display: none;
+            }
+
+            .mobile-toggle {
+                display: block;
+            }
+
+            .hero {
+                padding: 120px 0 70px;
+            }
+
+            .hero h1 {
+                font-size: 32px;
+            }
+
+            .hero-sub {
+                font-size: 16px;
+            }
+
+            .hero-actions {
+                flex-direction: column;
+            }
+
+            .section {
+                padding: 60px 0;
+            }
+
+            .section-header h2 {
+                font-size: 28px;
+            }
+
+            .how-steps {
+                flex-direction: column;
+                gap: 32px;
+            }
+
+            .how-step:not(:last-child)::after {
+                display: none;
+            }
+
+            .install-tabs {
+                flex-wrap: wrap;
+            }
+
+            .footer-bottom {
+                flex-direction: column;
+                gap: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+    <a href="#" class="navbar-brand">
+        <i class="fa-solid fa-film"></i>
+        AutoEditor
+    </a>
+    <ul class="navbar-links" id="navLinks">
+        <li><a href="#features">Возможности</a></li>
+        <li><a href="#how">Как работает</a></li>
+        <li><a href="#requirements">Требования</a></li>
+        <li><a href="#install">Установка</a></li>
+    </ul>
+    <a href="#download-url" class="navbar-cta">
+        <i class="fa-solid fa-download"></i> Скачать
+    </a>
+    <button class="mobile-toggle" id="mobileToggle" aria-label="Меню">
+        <i class="fa-solid fa-bars"></i>
+    </button>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+    <div class="container">
+        <div class="hero-badge">
+            <i class="fa-solid fa-sparkles"></i>
+            Плагин для DaVinci Resolve
+        </div>
+        <h1><span>AutoEditor</span><br>Автомонтаж видео</h1>
+        <p class="hero-sub">
+            10 шагов от сырого материала до готового видео — импорт, синхронизация звука,
+            удаление тишины, субтитры, нарезка, мультикамера, переходы и титры. Всё автоматически.
+        </p>
+        <div class="hero-actions">
+            <a href="#download-url" class="btn-primary">
+                <i class="fa-solid fa-download"></i> Скачать плагин
+            </a>
+            <a href="#features" class="btn-secondary">
+                <i class="fa-solid fa-list-check"></i> Возможности
+            </a>
+        </div>
+        <p class="hero-meta">Версия 1.0 <span>•</span> ~15 МБ <span>•</span> ZIP-архив</p>
+    </div>
+</section>
+
+<!-- Features -->
+<section class="section" id="features">
+    <div class="container">
+        <div class="section-header">
+            <h2>Возможности</h2>
+            <p>10 мощных инструментов для полного цикла автомонтажа — от импорта до финального рендера</p>
+        </div>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-file-import"></i></div>
+                <div class="feature-step">Шаг 1</div>
+                <h3>Импорт медиа</h3>
+                <p>Автоматический импорт видео, аудио и изображений в проект с организацией по бинам</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-wave-square"></i></div>
+                <div class="feature-step">Шаг 2</div>
+                <h3>Синхронизация аудио</h3>
+                <p>Синхронизация внешнего звука с видеодорожкой по форме волны — точность до кадра</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-volume-xmark"></i></div>
+                <div class="feature-step">Шаг 3</div>
+                <h3>Удаление тишины</h3>
+                <p>Автоматическое обнаружение и вырезка пауз, тишины и фонового шума</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-closed-captioning"></i></div>
+                <div class="feature-step">Шаг 4</div>
+                <h3>Генерация субтитров</h3>
+                <p>Автоматическое создание субтитров с помощью распознавания речи и AI-транскрипции</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-robot"></i></div>
+                <div class="feature-step">Шаг 5</div>
+                <h3>Очистка ИИ</h3>
+                <p>Умное удаление слов-паразитов, оговорок и лишних междометий из речи</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-scissors"></i></div>
+                <div class="feature-step">Шаг 6</div>
+                <h3>Нарезка фрагментов</h3>
+                <p>Интеллектуальная нарезка на сегменты по смысловым блокам и паузам</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-video"></i></div>
+                <div class="feature-step">Шаг 7</div>
+                <h3>Мультикамера</h3>
+                <p>Автоматическое переключение между камерами для динамичного монтажа</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-magnifying-glass-plus"></i></div>
+                <div class="feature-step">Шаг 8</div>
+                <h3>Динамический зум</h3>
+                <p>Добавление плавных зумов и панорамирования для визуального акцента</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+                <div class="feature-step">Шаг 9</div>
+                <h3>Видеопереходы</h3>
+                <p>Автоматическая расстановка переходов между клипами — плавные и стильные</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon"><i class="fa-solid fa-heading"></i></div>
+                <div class="feature-step">Шаг 10</div>
+                <h3>Титульные карточки</h3>
+                <p>Генерация вступительных титров, нижних третей и завершающих экранов</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- How it works -->
+<section class="section" id="how" style="background: rgba(30, 41, 59, 0.4);">
+    <div class="container">
+        <div class="section-header">
+            <h2>Как это работает</h2>
+            <p>Три простых шага — от скачивания до готового результата</p>
+        </div>
+        <div class="how-steps">
+            <div class="how-step">
+                <div class="how-step-num">1</div>
+                <h3>Скачай плагин</h3>
+                <p>Загрузи ZIP-архив и распакуй в удобное место на диске</p>
+            </div>
+            <div class="how-step">
+                <div class="how-step-num">2</div>
+                <h3>Открой в Resolve</h3>
+                <p>Запусти скрипт через меню Workspace → Scripts в DaVinci Resolve</p>
+            </div>
+            <div class="how-step">
+                <div class="how-step-num">3</div>
+                <h3>Нажми «Запустить все»</h3>
+                <p>Выбери нужные шаги или запусти все 10 — автомонтаж сделает остальное</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Requirements -->
+<section class="section" id="requirements">
+    <div class="container">
+        <div class="section-header">
+            <h2>Требования</h2>
+            <p>Убедитесь, что у вас установлены все необходимые компоненты</p>
+        </div>
+        <div class="req-grid">
+            <div class="req-card">
+                <i class="fa-solid fa-film"></i>
+                <h3>DaVinci Resolve Studio 18+</h3>
+                <p>Требуется Studio-версия для доступа к Scripting API</p>
+            </div>
+            <div class="req-card">
+                <i class="fa-brands fa-python"></i>
+                <h3>Python 3.10+</h3>
+                <p>Для запуска скриптов автоматизации и AI-модулей</p>
+            </div>
+            <div class="req-card">
+                <i class="fa-solid fa-terminal"></i>
+                <h3>ffmpeg</h3>
+                <p>Для анализа аудиодорожек, обнаружения тишины и обработки медиа</p>
+            </div>
+            <div class="req-card">
+                <i class="fa-solid fa-key"></i>
+                <h3>API-ключ OpenRouter</h3>
+                <p>Для AI-функций: очистка речи, генерация субтитров и титров</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Install -->
+<section class="section" id="install" style="background: rgba(30, 41, 59, 0.4);">
+    <div class="container">
+        <div class="section-header">
+            <h2>Установка</h2>
+            <p>Выберите вашу операционную систему и следуйте инструкциям</p>
+        </div>
+        <div class="install-tabs">
+            <button class="install-tab active" data-tab="mac">
+                <i class="fa-brands fa-apple"></i> macOS
+            </button>
+            <button class="install-tab" data-tab="win">
+                <i class="fa-brands fa-windows"></i> Windows
+            </button>
+            <button class="install-tab" data-tab="linux">
+                <i class="fa-brands fa-linux"></i> Linux
+            </button>
+        </div>
+
+        <!-- macOS -->
+        <div class="install-panel active" id="panel-mac">
+            <div class="code-block">
+                <button class="copy-btn" data-copy="mac"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                <code><span class="comment"># 1. Установите Python и ffmpeg через Homebrew</span>
+brew install python@3.10 ffmpeg
+
+<span class="comment"># 2. Распакуйте архив</span>
+unzip AutoEditor.zip -d ~/AutoEditor
+
+<span class="comment"># 3. Установите зависимости</span>
+cd ~/AutoEditor
+pip3 install -r requirements.txt
+
+<span class="comment"># 4. Укажите API-ключ</span>
+cp config.example.py config.py
+nano config.py  <span class="comment"># Вставьте ваш OpenRouter API-ключ</span></code>
+            </div>
+            <p class="install-note">Скрипт будет доступен в Resolve: Workspace → Scripts → <code>AutoEditor</code></p>
+        </div>
+
+        <!-- Windows -->
+        <div class="install-panel" id="panel-win">
+            <div class="code-block">
+                <button class="copy-btn" data-copy="win"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                <code><span class="comment"># 1. Установите Python 3.10+ с python.org</span>
+<span class="comment"># Убедитесь, что отмечен "Add Python to PATH"</span>
+
+<span class="comment"># 2. Установите ffmpeg (через winget или scoop)</span>
+winget install ffmpeg
+
+<span class="comment"># 3. Распакуйте архив в удобную папку</span>
+<span class="comment"># Например: C:\Users\%USERNAME%\AutoEditor</span>
+
+<span class="comment"># 4. Установите зависимости</span>
+cd %USERPROFILE%\AutoEditor
+pip install -r requirements.txt
+
+<span class="comment"># 5. Настройте конфиг</span>
+copy config.example.py config.py
+notepad config.py</code>
+            </div>
+            <p class="install-note">Скрипт будет доступен в Resolve: Workspace → Scripts → <code>AutoEditor</code></p>
+        </div>
+
+        <!-- Linux -->
+        <div class="install-panel" id="panel-linux">
+            <div class="code-block">
+                <button class="copy-btn" data-copy="linux"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                <code><span class="comment"># 1. Установите Python и ffmpeg</span>
+sudo apt update && sudo apt install python3 python3-pip ffmpeg
+
+<span class="comment"># 2. Распакуйте архив</span>
+unzip AutoEditor.zip -d ~/AutoEditor
+
+<span class="comment"># 3. Установите зависимости</span>
+cd ~/AutoEditor
+pip3 install -r requirements.txt
+
+<span class="comment"># 4. Укажите API-ключ</span>
+cp config.example.py config.py
+nano config.py  <span class="comment"># Вставьте ваш OpenRouter API-ключ</span></code>
+            </div>
+            <p class="install-note">Скрипт будет доступен в Resolve: Workspace → Scripts → <code>AutoEditor</code></p>
+        </div>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+    <div class="container">
+        <div class="footer-cta">
+            <h2>Готовы автоматизировать монтаж?</h2>
+            <p>Скачайте AutoEditor и превратите часы ручной работы в минуты</p>
+            <a href="#download-url" class="btn-primary">
+                <i class="fa-solid fa-download"></i> Скачать AutoEditor
+            </a>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; 2026 AutoEditor. Все права защищены.</span>
+            <div class="footer-links">
+                <a href="#download-url"><i class="fa-brands fa-github"></i> GitHub</a>
+                <a href="#features">Возможности</a>
+                <a href="#install">Установка</a>
+            </div>
+        </div>
+    </div>
+</footer>
+
+<script>
+    // ── Mobile menu toggle ──
+    const mobileToggle = document.getElementById('mobileToggle');
+    const navLinks = document.getElementById('navLinks');
+
+    mobileToggle.addEventListener('click', () => {
+        navLinks.classList.toggle('open');
+        const icon = mobileToggle.querySelector('i');
+        icon.classList.toggle('fa-bars');
+        icon.classList.toggle('fa-xmark');
+    });
+
+    // Close mobile menu on link click
+    navLinks.querySelectorAll('a').forEach(link => {
+        link.addEventListener('click', () => {
+            navLinks.classList.remove('open');
+            const icon = mobileToggle.querySelector('i');
+            icon.classList.add('fa-bars');
+            icon.classList.remove('fa-xmark');
+        });
+    });
+
+    // ── Install OS tabs ──
+    const tabs = document.querySelectorAll('.install-tab');
+    const panels = document.querySelectorAll('.install-panel');
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = tab.dataset.tab;
+            tabs.forEach(t => t.classList.remove('active'));
+            panels.forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('panel-' + target).classList.add('active');
+        });
+    });
+
+    // ── Copy to clipboard ──
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const panel = btn.closest('.code-block');
+            const code = panel.querySelector('code');
+            // Get text content, stripping HTML tags but keeping structure
+            const text = code.innerText;
+
+            navigator.clipboard.writeText(text).then(() => {
+                btn.classList.add('copied');
+                btn.innerHTML = '<i class="fa-solid fa-check"></i> Скопировано';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    btn.innerHTML = '<i class="fa-regular fa-copy"></i> Скопировать';
+                }, 2000);
+            });
+        });
+    });
+
+    // ── Smooth scroll for anchor links ──
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', (e) => {
+            const href = anchor.getAttribute('href');
+            if (href === '#download-url') return; // Leave download links as-is
+            e.preventDefault();
+            const target = document.querySelector(href);
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+    });
+</script>
+
+</body>
+</html>
