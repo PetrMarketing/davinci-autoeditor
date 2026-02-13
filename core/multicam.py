@@ -51,9 +51,9 @@ def distribute_multicam(
     """
     Мультикамерное распределение скринкаста на дорожке V2.
 
-    V2 уже содержит все сегменты скринкаста (добавлены на шаге 6).
-    Мультикамера удаляет V2-клипы, где должна быть основная камера,
-    оставляя только интервалы переключения на скринкаст.
+    Шаг 7 (AI cut) создаёт таймлайн только с V1.
+    Мультикамера добавляет V2 и размещает на ней только выбранные
+    интервалы переключения на скринкаст.
 
     Аргументы:
         screencast_clip: MediaPoolItem для видео скринкаста.
@@ -108,15 +108,8 @@ def distribute_multicam(
 
     log.info(f"Мультикамера: {len(switch_regions)} интервалов скринкаста")
 
-    # Удаляем существующие клипы с V2 (размещены на шаге 6)
-    track_count = timeline.GetTrackCount("video")
-    if track_count >= 2:
-        v2_items = timeline.GetItemListInTrack("video", 2)
-        if v2_items:
-            for item in v2_items:
-                timeline.DeleteTimelineItem(item)
-            log.info(f"Удалено {len(v2_items)} клипов с V2 для пересборки мультикамеры")
-    else:
+    # Добавляем V2 дорожку (шаг 7 создал таймлайн только с V1)
+    if timeline.GetTrackCount("video") < 2:
         timeline.AddTrack("video")
         log.info("Добавлена видеодорожка V2")
 

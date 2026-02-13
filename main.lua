@@ -201,6 +201,11 @@ local function mkdir_p(path)
 end
 
 local function shell_exec(cmd)
+    -- На macOS: DaVinci Resolve не наследует PATH из .zshrc/.bashrc,
+    -- поэтому ffmpeg/curl могут быть не найдены. Добавляем стандартные пути.
+    if not IS_WINDOWS then
+        cmd = 'PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH" ' .. cmd
+    end
     local handle = io.popen(cmd .. " 2>&1")
     if not handle then return "", -1 end
     local result = handle:read("*a")
@@ -457,13 +462,14 @@ local CONFIG_DEFAULTS = {
         ["1_import"] = "pending",
         ["2_sync"] = "pending",
         ["3_silence"] = "pending",
-        ["4_subtitles"] = "pending",
-        ["5_ai_clean"] = "pending",
-        ["6_cut"] = "pending",
-        ["7_multicam"] = "pending",
-        ["8_zoom"] = "pending",
-        ["9_transitions"] = "pending",
-        ["10_titles"] = "pending",
+        ["4_cut_silence"] = "pending",
+        ["5_subtitles"] = "pending",
+        ["6_ai_clean"] = "pending",
+        ["7_ai_cut"] = "pending",
+        ["8_multicam"] = "pending",
+        ["9_zoom"] = "pending",
+        ["10_transitions"] = "pending",
+        ["11_titles"] = "pending",
     },
 }
 
@@ -992,8 +998,41 @@ local function load_silence_regions(working_dir)
     return data.regions
 end
 
+--- Расставить маркеры на таймлайне в местах тишины (как в AutoCut).
+--- Красные маркеры показывают участки тишины для визуального контроля перед нарезкой.
+local function place_silence_markers(silence_regions)
+    local log = get_logger()
+    local timeline = get_current_timeline()
+    if not timeline then
+        log:warning("Нет активного таймлайна для расстановки маркеров")
+        return 0
+    end
+
+    local fps = get_fps()
+    local timeline_start = timeline:GetStartFrame()
+
+    -- Удаляем старые маркеры тишины (если есть)
+    pcall(function() timeline:DeleteMarkerByCustomData("AutoEditor:silence") end)
+
+    local count = 0
+    for _, region in ipairs(silence_regions) do
+        local start_frame = timeline_start + ms_to_frames(region[1], fps)
+        local dur_frames = math.max(ms_to_frames(region[2] - region[1], fps), 1)
+        local dur_sec = (region[2] - region[1]) / 1000
+
+        local ok = timeline:AddMarker(start_frame, "Red",
+            string.format("Тишина %.1fс", dur_sec),
+            string.format("%.1f - %.1f сек", region[1] / 1000, region[2] / 1000),
+            dur_frames, "AutoEditor:silence")
+        if ok then count = count + 1 end
+    end
+
+    log:info(string.format("Расставлено %d маркеров тишины на таймлайне (красные)", count))
+    return count
+end
+
 --------------------------------------------------------------------------------
--- Шаг 4: Генерация субтитров
+-- Шаг 5: Генерация субтитров
 --------------------------------------------------------------------------------
 local function generate_subtitles(language)
     local log = get_logger()
@@ -1021,11 +1060,20 @@ local function export_subtitles(working_dir, filename)
     filename = filename or "original.srt"
     local output_path = join_path(working_dir, filename)
 
-    local result = timeline:ExportSubtitles(output_path, "SRT")
-    if not result then
-        log:warning("ExportSubtitles не удался, попытка ручного извлечения...")
-        -- Ручное извлечение
-        local sub_count = timeline:GetTrackCount("subtitle")
+    local export_ok = false
+
+    -- ExportSubtitles может не существовать в некоторых версиях Resolve
+    if timeline.ExportSubtitles then
+        local ok, result = pcall(function() return timeline:ExportSubtitles(output_path, "SRT") end)
+        if ok and result then
+            export_ok = true
+            log:info("Субтитры экспортированы в: " .. output_path)
+        end
+    end
+
+    if not export_ok then
+        log:warning("ExportSubtitles недоступен, попытка ручного извлечения...")
+        local sub_count = timeline:GetTrackCount("subtitle") or 0
         if sub_count == 0 then error("В таймлайне не найдены дорожки субтитров") end
         local items = timeline:GetItemListInTrack("subtitle", 1)
         if not items or #items == 0 then error("В дорожке не найдены элементы субтитров") end
@@ -1043,8 +1091,6 @@ local function export_subtitles(working_dir, filename)
         end
         f:close()
         log:info("Вручную извлечено " .. #items .. " блоков субтитров")
-    else
-        log:info("Субтитры экспортированы в: " .. output_path)
     end
 
     if file_exists(output_path) then
@@ -1447,16 +1493,8 @@ local function distribute_multicam(screencast_clip, keep_segments, min_sec, max_
 
     log:info("Мультикамера: " .. #switch_regions .. " интервалов скринкаста")
 
-    -- Удаляем все существующие клипы с V2 (размещены на шаге 6)
-    if timeline:GetTrackCount("video") >= 2 then
-        local v2_items = timeline:GetItemListInTrack("video", 2)
-        if v2_items and #v2_items > 0 then
-            for _, item in ipairs(v2_items) do
-                timeline:DeleteTimelineItem(item)
-            end
-            log:info("Удалено " .. #v2_items .. " клипов с V2 для пересборки мультикамеры")
-        end
-    else
+    -- Добавляем V2 дорожку (шаг 7 создал таймлайн только с V1)
+    if timeline:GetTrackCount("video") < 2 then
         timeline:AddTrack("video")
         log:info("Добавлена видеодорожка V2")
     end
@@ -1981,9 +2019,11 @@ local function build_and_run_ui()
         else
             threshold = auto_detect_threshold(video_path)
         end
-        detect_silence(video_path, threshold,
+        local regions = detect_silence(video_path, threshold,
             config:get("silence_min_duration_ms", 500),
             config:get("working_dir"))
+        -- Расставляем маркеры на таймлайне (как в AutoCut)
+        place_silence_markers(regions)
     end
 
     step_runners["4_cut_silence"] = function()
@@ -1998,7 +2038,13 @@ local function build_and_run_ui()
     end
 
     step_runners["5_subtitles"] = function()
-        generate_subtitles(config:get("subtitle_language", "Russian"))
+        local log = get_logger()
+        local result = generate_subtitles(config:get("subtitle_language", "Russian"))
+        if not result then
+            log:warning("Субтитры не были сгенерированы. Требуется DaVinci Resolve Studio.")
+            log:info("Шаги 6 и 7 будут использовать только нарезку тишины (без ИИ).")
+            return
+        end
         export_subtitles(config:get("working_dir"), "original.srt")
     end
 
@@ -2018,9 +2064,10 @@ local function build_and_run_ui()
         local total_ms = get_clip_duration_ms(main_clip)
         local fps = get_fps()
         local keep = compute_ai_keep_segments(config:get("working_dir"), total_ms, fps)
+        -- V2 НЕ добавляем — мультикамера (шаг 8) добавит только нужные интервалы
         rebuild_timeline(main_clip, keep,
             config:get("timeline_name", "AutoEditor_Final"), fps,
-            clips.screencast, config:get("audio_offset_ms", 0))
+            nil, 0)
     end
 
     step_runners["8_multicam"] = function()

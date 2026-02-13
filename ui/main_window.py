@@ -391,19 +391,21 @@ class AutoEditorWindow:
         auto_sync_audio(clips, self.config)
 
     def _runner_3_silence(self):
-        from core.silence_remover import detect_silence, auto_detect_threshold
+        from core.silence_remover import detect_silence, auto_detect_threshold, place_silence_markers
         c = self.config
         video_path = c.get("main_video_path")
         if c.get("silence_manual", False):
             threshold = c.get("silence_threshold_db", -40)
         else:
             threshold = auto_detect_threshold(video_path)
-        detect_silence(
+        regions = detect_silence(
             video_path,
             threshold_db=threshold,
             min_duration_ms=c.get("silence_min_duration_ms", 500),
             working_dir=c.get("working_dir"),
         )
+        # Расставляем маркеры на таймлайне (как в AutoCut)
+        place_silence_markers(regions)
 
     def _runner_4_cut_silence(self):
         from core.media_loader import find_tagged_clips
@@ -428,7 +430,12 @@ class AutoEditorWindow:
     def _runner_5_subtitles(self):
         from core.subtitle_manager import generate_subtitles, export_subtitles
         c = self.config
-        generate_subtitles(c.get("subtitle_language", "Russian"))
+        log = get_logger()
+        result = generate_subtitles(c.get("subtitle_language", "Russian"))
+        if not result:
+            log.warning("Субтитры не были сгенерированы. Требуется DaVinci Resolve Studio.")
+            log.info("Шаги 6 и 7 будут использовать только нарезку тишины (без ИИ).")
+            return
         export_subtitles(c.get("working_dir"), "original.srt")
 
     def _runner_6_ai_clean(self):
@@ -456,10 +463,11 @@ class AutoEditorWindow:
         total_ms = get_clip_duration_ms(main_clip)
         fps = get_fps()
         keep = compute_ai_keep_segments(c.get("working_dir"), total_ms, fps)
+        # V2 НЕ добавляем — мультикамера (шаг 8) добавит только нужные интервалы
         rebuild_timeline(
             main_clip, keep, c.get("timeline_name", "AutoEditor_Final"), fps,
-            screencast_clip=clips.get("screencast"),
-            audio_offset_ms=c.get("audio_offset_ms", 0),
+            screencast_clip=None,
+            audio_offset_ms=0,
         )
 
     def _runner_8_multicam(self):

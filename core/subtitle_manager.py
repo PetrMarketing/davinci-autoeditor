@@ -69,13 +69,19 @@ def export_subtitles(working_dir, filename="original.srt"):
 
     output_path = os.path.join(working_dir, filename)
 
-    # Экспорт дорожки субтитров в SRT
-    result = timeline.ExportSubtitles(output_path, "SRT")
-    if result:
-        log.info(f"Субтитры экспортированы в: {output_path}")
-    else:
-        # Запасной вариант: попытка извлечь из элементов дорожки субтитров
-        log.warning("ExportSubtitles не удался, попытка ручного извлечения...")
+    # ExportSubtitles может не существовать в некоторых версиях Resolve
+    export_ok = False
+    if hasattr(timeline, "ExportSubtitles") and timeline.ExportSubtitles:
+        try:
+            result = timeline.ExportSubtitles(output_path, "SRT")
+            if result:
+                export_ok = True
+                log.info(f"Субтитры экспортированы в: {output_path}")
+        except Exception:
+            pass
+
+    if not export_ok:
+        log.warning("ExportSubtitles недоступен, попытка ручного извлечения...")
         _extract_subtitles_manual(timeline, output_path)
 
     # Проверка результата

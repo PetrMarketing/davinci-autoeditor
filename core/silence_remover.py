@@ -144,3 +144,59 @@ def load_silence_regions(working_dir):
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return [tuple(r) for r in data.get("regions", [])]
+
+
+def place_silence_markers(silence_regions):
+    """
+    Расставить маркеры на таймлайне в местах тишины (как в AutoCut).
+    Красные маркеры показывают участки тишины для визуального контроля перед нарезкой.
+
+    Args:
+        silence_regions: Список кортежей (start_ms, end_ms).
+
+    Returns:
+        Количество расставленных маркеров.
+    """
+    log = get_logger()
+
+    try:
+        from core.resolve_api import get_current_timeline, get_fps
+        from utils.timecode import ms_to_frames
+    except ImportError:
+        log.warning("Не удалось импортировать Resolve API для расстановки маркеров")
+        return 0
+
+    timeline = get_current_timeline()
+    if not timeline:
+        log.warning("Нет активного таймлайна для расстановки маркеров")
+        return 0
+
+    fps = get_fps()
+    timeline_start = timeline.GetStartFrame()
+
+    # Удаляем старые маркеры тишины
+    try:
+        timeline.DeleteMarkerByCustomData("AutoEditor:silence")
+    except Exception:
+        pass
+
+    count = 0
+    for region in silence_regions:
+        start_frame = timeline_start + ms_to_frames(region[0], fps)
+        dur_frames = max(ms_to_frames(region[1] - region[0], fps), 1)
+        dur_sec = (region[1] - region[0]) / 1000
+
+        try:
+            ok = timeline.AddMarker(
+                start_frame, "Red",
+                f"Тишина {dur_sec:.1f}с",
+                f"{region[0] / 1000:.1f} - {region[1] / 1000:.1f} сек",
+                dur_frames, "AutoEditor:silence",
+            )
+            if ok:
+                count += 1
+        except Exception:
+            pass
+
+    log.info(f"Расставлено {count} маркеров тишины на таймлайне (красные)")
+    return count
