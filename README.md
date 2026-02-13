@@ -63,12 +63,23 @@ pip3 install pydub httpx
 
 API-ключ OpenRouter указывается в настройках плагина.
 
+## Два варианта: Python и Lua
+
+| | Python (main.py) | Lua (main.lua) |
+|---|---|---|
+| Зависимости | pydub, httpx | curl, ffmpeg (без pip) |
+| Структура | 12 модулей + UI | Единый файл 1800 строк |
+| Запуск | `main` в меню Scripts | `main` в меню Scripts |
+
+Lua-версия полностью автономна — не требует установки Python-пакетов. Для AI-очистки используется `curl`, для анализа тишины — `ffmpeg silencedetect`.
+
 ## Структура проекта
 
 ```
-├── main.py              # Точка входа
+├── main.lua             # Lua-версия (всё-в-одном файле)
+├── main.py              # Python точка входа
 ├── config.py            # Конфигурация (JSON-персистенция)
-├── core/                # 10 модулей автомонтажа
+├── core/                # 10 модулей автомонтажа (Python)
 │   ├── media_loader.py
 │   ├── audio_sync.py
 │   ├── silence_remover.py
