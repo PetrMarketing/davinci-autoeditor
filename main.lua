@@ -669,7 +669,7 @@ local function import_media(main_video_path, screencast_path)
         end
     end
 
-    -- Создаём таймлайн и размещаем основной клип на V1
+    -- Создаём таймлайн и размещаем клипы: V1=основное видео, V2=скринкаст
     local project = get_current_project()
     local tl_name = "AutoEditor_Timeline"
 
@@ -688,12 +688,12 @@ local function import_media(main_video_path, screencast_path)
         project:SetCurrentTimeline(existing_tl)
         log:info("Таймлайн уже существует: " .. tl_name .. " (используется существующий)")
     else
+        -- Создаём таймлайн с основным клипом на V1
         local tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
         if tl then
             project:SetCurrentTimeline(tl)
             log:info("Таймлайн создан: " .. tl_name .. " (основной клип на V1)")
         else
-            -- Альтернативный способ: создать пустой таймлайн и добавить клип
             log:info("Пробуем альтернативный способ создания таймлайна...")
             tl = mp:CreateEmptyTimeline(tl_name)
             if tl then
@@ -706,6 +706,30 @@ local function import_media(main_video_path, screencast_path)
                 end
             else
                 log:warning("Не удалось создать таймлайн автоматически")
+            end
+        end
+
+        -- Добавляем скринкаст на V2 (если есть)
+        if result.screencast and tl then
+            log:info("Добавление скринкаста на V2...")
+            -- Добавляем видеодорожку V2 если нужно
+            if tl:GetTrackCount("video") < 2 then
+                tl:AddTrack("video")
+            end
+            local sc_info = {
+                mediaPoolItem = result.screencast,
+                startFrame = 0,
+                trackIndex = 2,
+                mediaType = 1,
+            }
+            local sc_ok = mp:AppendToTimeline({sc_info})
+            if sc_ok then
+                log:info("Скринкаст размещён на V2")
+                -- Отключаем аудио на V2 (используется аудио с V1)
+                tl:SetTrackEnable("audio", 2, false)
+                log:info("Аудио на V2 отключено (используется аудио основного видео)")
+            else
+                log:warning("Не удалось добавить скринкаст на V2")
             end
         end
     end
@@ -1186,10 +1210,11 @@ local function compute_keep_segments(working_dir, total_duration_ms, fps)
     return keep_segments
 end
 
-local function rebuild_timeline(main_clip, keep_segments, timeline_name, fps)
+local function rebuild_timeline(main_clip, keep_segments, timeline_name, fps, screencast_clip, audio_offset_ms)
     local log = get_logger()
     local mp = get_media_pool()
     fps = fps or 25.0
+    audio_offset_ms = audio_offset_ms or 0
 
     log:info(string.format("Пересборка таймлайна '%s' из %d сегментов...",
         timeline_name, #keep_segments))
@@ -1197,6 +1222,7 @@ local function rebuild_timeline(main_clip, keep_segments, timeline_name, fps)
     local new_tl = create_timeline(timeline_name)
     if not new_tl then error("Не удалось создать таймлайн: " .. timeline_name) end
 
+    -- V1: основное видео — все сохраняемые сегменты
     local clip_infos = {}
     for _, seg in ipairs(keep_segments) do
         clip_infos[#clip_infos + 1] = {
@@ -1210,9 +1236,40 @@ local function rebuild_timeline(main_clip, keep_segments, timeline_name, fps)
 
     local result = mp:AppendToTimeline(clip_infos)
     if result then
-        log:info("Добавлено " .. #clip_infos .. " сегментов в таймлайн")
+        log:info("Добавлено " .. #clip_infos .. " сегментов основного видео на V1")
     else
         error("Не удалось добавить сегменты в таймлайн")
+    end
+
+    -- V2: скринкаст — те же сегменты со смещением аудио (blade+ripple на обеих дорожках)
+    if screencast_clip then
+        log:info("Добавление скринкаста на V2 (те же сегменты со смещением)...")
+        if new_tl:GetTrackCount("video") < 2 then
+            new_tl:AddTrack("video")
+        end
+
+        local sc_infos = {}
+        for _, seg in ipairs(keep_segments) do
+            local src_start_ms = math.max(0, seg[1] + audio_offset_ms)
+            local src_end_ms = math.max(0, seg[2] + audio_offset_ms)
+            sc_infos[#sc_infos + 1] = {
+                mediaPoolItem = screencast_clip,
+                startFrame = ms_to_frames(src_start_ms, fps),
+                endFrame = ms_to_frames(src_end_ms, fps),
+                trackIndex = 2,
+                mediaType = 1,
+            }
+        end
+
+        local sc_result = mp:AppendToTimeline(sc_infos)
+        if sc_result then
+            log:info("Добавлено " .. #sc_infos .. " сегментов скринкаста на V2")
+            -- Отключаем аудио на V2
+            new_tl:SetTrackEnable("audio", 2, false)
+            log:info("Аудио на V2 отключено")
+        else
+            log:warning("Не удалось добавить сегменты скринкаста на V2")
+        end
     end
 
     local items = new_tl:GetItemListInTrack("video", 1)
@@ -1253,6 +1310,9 @@ end
 
 --------------------------------------------------------------------------------
 -- Шаг 7: Мультикамера
+-- V2 уже содержит все сегменты скринкаста (добавлены на шаге 6).
+-- Мультикамера удаляет V2-клипы, где должна быть основная камера,
+-- оставляя только интервалы переключения на скринкаст.
 --------------------------------------------------------------------------------
 local function distribute_multicam(screencast_clip, keep_segments, min_sec, max_sec, fps, audio_offset_ms)
     local log = get_logger()
@@ -1274,7 +1334,7 @@ local function distribute_multicam(screencast_clip, keep_segments, min_sec, max_
     math.randomseed(os.time())
 
     local timeline_pos_ms = 0
-    local switch_regions = {}
+    local switch_regions = {}  -- интервалы, где показываем скринкаст
     local show_screencast = false
 
     for _, seg in ipairs(keep_segments) do
@@ -1296,13 +1356,23 @@ local function distribute_multicam(screencast_clip, keep_segments, min_sec, max_
         timeline_pos_ms = timeline_pos_ms + seg_dur
     end
 
-    log:info("Размещение " .. #switch_regions .. " сегментов скринкаста на V2...")
+    log:info("Мультикамера: " .. #switch_regions .. " интервалов скринкаста")
 
-    if timeline:GetTrackCount("video") < 2 then
+    -- Удаляем все существующие клипы с V2 (размещены на шаге 6)
+    if timeline:GetTrackCount("video") >= 2 then
+        local v2_items = timeline:GetItemListInTrack("video", 2)
+        if v2_items and #v2_items > 0 then
+            for _, item in ipairs(v2_items) do
+                timeline:DeleteTimelineItem(item)
+            end
+            log:info("Удалено " .. #v2_items .. " клипов с V2 для пересборки мультикамеры")
+        end
+    else
         timeline:AddTrack("video")
         log:info("Добавлена видеодорожка V2")
     end
 
+    -- Размещаем только выбранные интервалы скринкаста на V2
     local clip_infos = {}
     for _, r in ipairs(switch_regions) do
         local src_start = ms_to_frames(math.max(0, r[3] + audio_offset_ms), fps)
@@ -1847,7 +1917,8 @@ local function build_and_run_ui()
         local total_ms = get_clip_duration_ms(main_clip)
         local fps = get_fps()
         local keep = compute_keep_segments(config:get("working_dir"), total_ms, fps)
-        rebuild_timeline(main_clip, keep, config:get("timeline_name", "AutoEditor_Final"), fps)
+        rebuild_timeline(main_clip, keep, config:get("timeline_name", "AutoEditor_Final"), fps,
+            clips.screencast, config:get("audio_offset_ms", 0))
     end
 
     step_runners["7_multicam"] = function()

@@ -435,7 +435,11 @@ class AutoEditorWindow:
         total_ms = get_clip_duration_ms(main_clip)
         fps = get_fps()
         keep = compute_keep_segments(c.get("working_dir"), total_ms, fps)
-        rebuild_timeline(main_clip, keep, c.get("timeline_name", "AutoEditor_Final"), fps)
+        rebuild_timeline(
+            main_clip, keep, c.get("timeline_name", "AutoEditor_Final"), fps,
+            screencast_clip=clips.get("screencast"),
+            audio_offset_ms=c.get("audio_offset_ms", 0),
+        )
 
     def _runner_7_multicam(self):
         from core.media_loader import find_tagged_clips

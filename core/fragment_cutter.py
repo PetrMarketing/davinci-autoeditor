@@ -78,15 +78,19 @@ def compute_keep_segments(working_dir, total_duration_ms, fps=25.0):
     return keep_segments
 
 
-def rebuild_timeline(main_clip, keep_segments, timeline_name, fps=25.0):
+def rebuild_timeline(main_clip, keep_segments, timeline_name, fps=25.0,
+                     screencast_clip=None, audio_offset_ms=0):
     """
-    Создание нового таймлайна только из сохраняемых сегментов основного клипа.
+    Создание нового таймлайна из сохраняемых сегментов на V1 (основное видео)
+    и V2 (скринкаст). Имитирует blade+ripple delete на обеих дорожках.
 
     Args:
         main_clip: MediaPoolItem основного видео.
         keep_segments: Список кортежей (start_ms, end_ms).
         timeline_name: Имя нового таймлайна.
         fps: FPS таймлайна.
+        screencast_clip: MediaPoolItem скринкаста (необязательно).
+        audio_offset_ms: Смещение аудио скринкаста в мс (из шага 2).
 
     Returns:
         Новый объект Timeline.
@@ -101,28 +105,51 @@ def rebuild_timeline(main_clip, keep_segments, timeline_name, fps=25.0):
     if not new_tl:
         raise RuntimeError(f"Не удалось создать таймлайн: {timeline_name}")
 
-    # Формирование списка информации о клипах для AppendToTimeline
+    # V1: основное видео — все сохраняемые сегменты
     clip_infos = []
-    for i, (start_ms, end_ms) in enumerate(keep_segments):
-        start_frame = ms_to_frames(start_ms, fps)
-        end_frame = ms_to_frames(end_ms, fps)
-
+    for start_ms, end_ms in keep_segments:
         clip_info = {
             "mediaPoolItem": main_clip,
-            "startFrame": start_frame,
-            "endFrame": end_frame,
+            "startFrame": ms_to_frames(start_ms, fps),
+            "endFrame": ms_to_frames(end_ms, fps),
             "trackIndex": 1,
-            "mediaType": 1,  # 1 = Видео + Аудио
+            "mediaType": 1,
         }
         clip_infos.append(clip_info)
 
-    # Добавление всех сегментов в новый таймлайн
     result = mp.AppendToTimeline(clip_infos)
     if result:
-        log.info(f"Добавлено {len(clip_infos)} сегментов в таймлайн")
+        log.info(f"Добавлено {len(clip_infos)} сегментов основного видео на V1")
     else:
         log.error("AppendToTimeline завершился с ошибкой")
         raise RuntimeError("Не удалось добавить сегменты в таймлайн")
+
+    # V2: скринкаст — те же сегменты со смещением аудио (blade+ripple на обеих дорожках)
+    if screencast_clip:
+        log.info("Добавление скринкаста на V2 (те же сегменты со смещением)...")
+        if new_tl.GetTrackCount("video") < 2:
+            new_tl.AddTrack("video")
+
+        sc_infos = []
+        for start_ms, end_ms in keep_segments:
+            src_start_ms = max(0, start_ms + audio_offset_ms)
+            src_end_ms = max(0, end_ms + audio_offset_ms)
+            sc_info = {
+                "mediaPoolItem": screencast_clip,
+                "startFrame": ms_to_frames(src_start_ms, fps),
+                "endFrame": ms_to_frames(src_end_ms, fps),
+                "trackIndex": 2,
+                "mediaType": 1,
+            }
+            sc_infos.append(sc_info)
+
+        sc_result = mp.AppendToTimeline(sc_infos)
+        if sc_result:
+            log.info(f"Добавлено {len(sc_infos)} сегментов скринкаста на V2")
+            new_tl.SetTrackEnable("audio", 2, False)
+            log.info("Аудио на V2 отключено")
+        else:
+            log.warning("Не удалось добавить сегменты скринкаста на V2")
 
     # Проверка
     item_count = new_tl.GetTrackCount("video")
@@ -131,9 +158,7 @@ def rebuild_timeline(main_clip, keep_segments, timeline_name, fps=25.0):
     total_frames = 0
     items = new_tl.GetItemListInTrack("video", 1)
     if items:
-        total_frames = sum(
-            item.GetDuration() for item in items
-        )
+        total_frames = sum(item.GetDuration() for item in items)
     log.info(f"Всего кадров в новом таймлайне: {total_frames}")
 
     return new_tl

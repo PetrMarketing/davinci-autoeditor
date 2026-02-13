@@ -55,8 +55,8 @@ def import_media(main_video_path, screencast_path=""):
     elif screencast_path:
         log.warning(f"Файл скринкаста не найден: {screencast_path}")
 
-    # Создаём таймлайн и размещаем основной клип на V1
-    from core.resolve_api import get_timeline_by_name
+    # Создаём таймлайн и размещаем клипы: V1=основное видео, V2=скринкаст
+    from core.resolve_api import get_timeline_by_name, create_timeline
     tl_name = "AutoEditor_Timeline"
 
     # Проверяем, не существует ли уже такой таймлайн
@@ -70,9 +70,7 @@ def import_media(main_video_path, screencast_path=""):
             get_current_project().SetCurrentTimeline(tl)
             log.info(f"Таймлайн создан: {tl_name} (основной клип на V1)")
         else:
-            # Альтернативный способ: создать пустой таймлайн и добавить клип
             log.info("Пробуем альтернативный способ создания таймлайна...")
-            from core.resolve_api import create_timeline
             tl = create_timeline(tl_name)
             if tl:
                 appended = mp.AppendToTimeline([main_clip])
@@ -82,6 +80,25 @@ def import_media(main_video_path, screencast_path=""):
                     log.warning("Таймлайн создан, но клип не удалось добавить")
             else:
                 log.warning("Не удалось создать таймлайн автоматически")
+
+        # Добавляем скринкаст на V2 (если есть)
+        if "screencast" in result and tl:
+            log.info("Добавление скринкаста на V2...")
+            if tl.GetTrackCount("video") < 2:
+                tl.AddTrack("video")
+            sc_info = {
+                "mediaPoolItem": result["screencast"],
+                "startFrame": 0,
+                "trackIndex": 2,
+                "mediaType": 1,
+            }
+            sc_ok = mp.AppendToTimeline([sc_info])
+            if sc_ok:
+                log.info("Скринкаст размещён на V2")
+                tl.SetTrackEnable("audio", 2, False)
+                log.info("Аудио на V2 отключено (используется аудио основного видео)")
+            else:
+                log.warning("Не удалось добавить скринкаст на V2")
 
     log.info(f"Шаг 1 завершён: импортировано клипов: {len(result)}")
     return result

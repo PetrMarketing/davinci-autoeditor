@@ -49,11 +49,11 @@ def distribute_multicam(
     audio_offset_ms=0,
 ):
     """
-    Распределить сегменты скринкаста на дорожке V2 текущего таймлайна.
+    Мультикамерное распределение скринкаста на дорожке V2.
 
-    Алгоритм выбирает случайные точки переключения внутри сохраняемых сегментов,
-    размещая клипы скринкаста на V2, где скринкаст должен отображаться.
-    V1 (основная камера) присутствует всегда; V2 со скринкастом накладывается поверх, когда активен.
+    V2 уже содержит все сегменты скринкаста (добавлены на шаге 6).
+    Мультикамера удаляет V2-клипы, где должна быть основная камера,
+    оставляя только интервалы переключения на скринкаст.
 
     Аргументы:
         screencast_clip: MediaPoolItem для видео скринкаста.
@@ -82,8 +82,6 @@ def distribute_multicam(
 
     log.info("Вычисление точек переключения мультикамеры...")
 
-    # Вычисляем смещение позиции на таймлайне для каждого сохраняемого сегмента
-    # Каждый сохраняемый сегмент соответствует позиции на пересобранном таймлайне
     timeline_pos_ms = 0
     switch_regions = []  # (timeline_start_ms, timeline_end_ms, source_start_ms)
     show_screencast = False
@@ -108,15 +106,21 @@ def distribute_multicam(
 
         timeline_pos_ms += seg_duration_ms
 
-    log.info(f"Размещение {len(switch_regions)} сегментов скринкаста на V2...")
+    log.info(f"Мультикамера: {len(switch_regions)} интервалов скринкаста")
 
-    # Убеждаемся, что дорожка V2 существует
+    # Удаляем существующие клипы с V2 (размещены на шаге 6)
     track_count = timeline.GetTrackCount("video")
-    if track_count < 2:
+    if track_count >= 2:
+        v2_items = timeline.GetItemListInTrack("video", 2)
+        if v2_items:
+            for item in v2_items:
+                timeline.DeleteTimelineItem(item)
+            log.info(f"Удалено {len(v2_items)} клипов с V2 для пересборки мультикамеры")
+    else:
         timeline.AddTrack("video")
         log.info("Добавлена видеодорожка V2")
 
-    # Формируем информацию о клипах для V2
+    # Размещаем только выбранные интервалы скринкаста на V2
     clip_infos = []
     for tl_start_ms, tl_end_ms, src_start_ms in switch_regions:
         src_start_frame = ms_to_frames(max(0, src_start_ms + audio_offset_ms), fps)
@@ -140,7 +144,6 @@ def distribute_multicam(
             log.error("Не удалось разместить сегменты скринкаста на V2")
             return 0
 
-    # Отключаем аудио на V2 (звук скринкаста не нужен, если синхронизирован на V1)
     timeline.SetTrackEnable("audio", 2, False)
     log.info("Аудио на дорожке V2 отключено")
 
