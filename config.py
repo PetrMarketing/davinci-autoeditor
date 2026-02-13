@@ -24,6 +24,7 @@ DEFAULTS = {
     "ai_chunk_size": 50,  # блоков субтитров за один запрос
 
     # Детекция тишины
+    "silence_manual": False,
     "silence_threshold_db": -40,
     "silence_min_duration_ms": 500,
 
@@ -32,6 +33,7 @@ DEFAULTS = {
     "zoom_max": 1.3,
 
     # Интервалы переключения мультикам (секунды)
+    "multicam_manual": False,
     "multicam_min_interval": 5,
     "multicam_max_interval": 15,
 

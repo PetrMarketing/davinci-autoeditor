@@ -97,7 +97,10 @@ class AutoEditorWindow:
             ui.Label({"Text": "Настройки", "Weight": 0,
                        "Font": ui.Font({"Family": "Arial", "PixelSize": 14})}),
             ui.HGroup([
-                ui.Label({"Text": "Порог тишины дБ:", "Weight": 0, "MinimumSize": [140, 0]}),
+                ui.CheckBox({"ID": "SilenceManual", "Text": "Порог тишины вручную", "Weight": 0}),
+            ]),
+            ui.HGroup({"ID": "SilenceRow"}, [
+                ui.Label({"Text": "Порог дБ:", "Weight": 0, "MinimumSize": [140, 0]}),
                 ui.SpinBox({"ID": "SilenceDb", "Minimum": -80, "Maximum": 0, "Value": -40}),
                 ui.Label({"Text": "Мин. мс:", "Weight": 0}),
                 ui.SpinBox({"ID": "SilenceMs", "Minimum": 100, "Maximum": 5000,
@@ -112,6 +115,9 @@ class AutoEditorWindow:
                                   "Value": 1.3, "SingleStep": 0.05}),
             ]),
             ui.HGroup([
+                ui.CheckBox({"ID": "SwitchManual", "Text": "Переключение вручную", "Weight": 0}),
+            ]),
+            ui.HGroup({"ID": "SwitchRow"}, [
                 ui.Label({"Text": "Переключ. сек:", "Weight": 0, "MinimumSize": [140, 0]}),
                 ui.SpinBox({"ID": "SwitchMin", "Minimum": 1, "Maximum": 60, "Value": 5}),
                 ui.Label({"Text": "—", "Weight": 0}),
@@ -206,12 +212,16 @@ class AutoEditorWindow:
         items["WorkingDir"].Text = c.get("working_dir", "")
         items["TransitionPath"].Text = c.get("transition_video_path", "")
         items["TitleBgPath"].Text = c.get("title_background_path", "")
+        items["SilenceManual"].Checked = c.get("silence_manual", False)
         items["SilenceDb"].Value = c.get("silence_threshold_db", -40)
         items["SilenceMs"].Value = c.get("silence_min_duration_ms", 500)
+        items["SilenceRow"].Hidden = not c.get("silence_manual", False)
         items["ZoomMin"].Value = c.get("zoom_min", 1.0)
         items["ZoomMax"].Value = c.get("zoom_max", 1.3)
+        items["SwitchManual"].Checked = c.get("multicam_manual", False)
         items["SwitchMin"].Value = c.get("multicam_min_interval", 5)
         items["SwitchMax"].Value = c.get("multicam_max_interval", 15)
+        items["SwitchRow"].Hidden = not c.get("multicam_manual", False)
 
         # Восстановление статусов шагов
         for step_key, _, _ in STEPS:
@@ -227,10 +237,12 @@ class AutoEditorWindow:
         c.set("working_dir", items["WorkingDir"].Text)
         c.set("transition_video_path", items["TransitionPath"].Text)
         c.set("title_background_path", items["TitleBgPath"].Text)
+        c.set("silence_manual", items["SilenceManual"].Checked)
         c.set("silence_threshold_db", items["SilenceDb"].Value)
         c.set("silence_min_duration_ms", items["SilenceMs"].Value)
         c.set("zoom_min", items["ZoomMin"].Value)
         c.set("zoom_max", items["ZoomMax"].Value)
+        c.set("multicam_manual", items["SwitchManual"].Checked)
         c.set("multicam_min_interval", items["SwitchMin"].Value)
         c.set("multicam_max_interval", items["SwitchMax"].Value)
         c.save()
@@ -241,6 +253,10 @@ class AutoEditorWindow:
         self.win.On.ClearLog.Clicked = self._on_clear_log
         self.win.On.ResetSteps.Clicked = self._on_reset_steps
         self.win.On.RunAll.Clicked = self._on_run_all
+
+        # Чекбоксы ручного режима
+        self.win.On.SilenceManual.Clicked = self._on_silence_manual_toggle
+        self.win.On.SwitchManual.Clicked = self._on_switch_manual_toggle
 
         # Кнопки обзора файлов
         self.win.On.BrowseMainVideo.Clicked = lambda ev: self._browse("MainVideoPath")
@@ -279,6 +295,12 @@ class AutoEditorWindow:
         log_area = self.items.get("LogArea")
         if log_area:
             log_area.Append(message + "\n")
+
+    def _on_silence_manual_toggle(self, ev):
+        self.items["SilenceRow"].Hidden = not self.items["SilenceManual"].Checked
+
+    def _on_switch_manual_toggle(self, ev):
+        self.items["SwitchRow"].Hidden = not self.items["SwitchManual"].Checked
 
     def _on_close(self, ev):
         self._save_config_from_ui()
@@ -368,11 +390,16 @@ class AutoEditorWindow:
         auto_sync_audio(clips, self.config)
 
     def _runner_3_silence(self):
-        from core.silence_remover import detect_silence
+        from core.silence_remover import detect_silence, auto_detect_threshold
         c = self.config
+        video_path = c.get("main_video_path")
+        if c.get("silence_manual", False):
+            threshold = c.get("silence_threshold_db", -40)
+        else:
+            threshold = auto_detect_threshold(video_path)
         detect_silence(
-            c.get("main_video_path"),
-            threshold_db=c.get("silence_threshold_db", -40),
+            video_path,
+            threshold_db=threshold,
             min_duration_ms=c.get("silence_min_duration_ms", 500),
             working_dir=c.get("working_dir"),
         )
@@ -412,7 +439,7 @@ class AutoEditorWindow:
 
     def _runner_7_multicam(self):
         from core.media_loader import find_tagged_clips
-        from core.multicam import distribute_multicam
+        from core.multicam import distribute_multicam, auto_switch_intervals
         from core.fragment_cutter import load_keep_segments
         from core.resolve_api import get_fps
 
@@ -423,10 +450,15 @@ class AutoEditorWindow:
             get_logger().info("Скринкаст отсутствует — пропускаем мультикамеру")
             return
         keep = load_keep_segments(c.get("working_dir"))
+        if c.get("multicam_manual", False):
+            min_iv = c.get("multicam_min_interval", 5)
+            max_iv = c.get("multicam_max_interval", 15)
+        else:
+            min_iv, max_iv = auto_switch_intervals(keep)
         distribute_multicam(
             sc, keep,
-            min_interval_sec=c.get("multicam_min_interval", 5),
-            max_interval_sec=c.get("multicam_max_interval", 15),
+            min_interval_sec=min_iv,
+            max_interval_sec=max_iv,
             fps=get_fps(),
             audio_offset_ms=c.get("audio_offset_ms", 0),
         )

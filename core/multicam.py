@@ -11,6 +11,35 @@ from utils.timecode import ms_to_frames
 from core.resolve_api import get_media_pool, get_current_timeline, get_fps
 
 
+def auto_switch_intervals(keep_segments):
+    """
+    Автоматически рассчитать интервалы переключения на основе длительности сегментов.
+
+    Логика: берём среднюю длительность сегмента, делим на 3-4 части.
+    Минимальный интервал = средняя / 4, максимальный = средняя / 2.
+    Ограничения: мин 3с, макс 30с.
+
+    Возвращает:
+        Кортеж (min_interval_sec, max_interval_sec).
+    """
+    log = get_logger()
+
+    if not keep_segments:
+        log.info("Нет сегментов — используются интервалы по умолчанию (5-15с)")
+        return 5, 15
+
+    durations = [(end - start) / 1000.0 for start, end in keep_segments]
+    avg_dur = sum(durations) / len(durations)
+
+    min_iv = max(3, int(round(avg_dur / 4)))
+    max_iv = max(min_iv + 1, int(round(avg_dur / 2)))
+    max_iv = min(max_iv, 30)
+
+    log.info(f"Автоинтервалы переключения: {min_iv}-{max_iv}с "
+             f"(средний сегмент: {avg_dur:.1f}с)")
+    return min_iv, max_iv
+
+
 def distribute_multicam(
     screencast_clip,
     keep_segments,

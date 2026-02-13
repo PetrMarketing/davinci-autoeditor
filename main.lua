@@ -801,6 +801,25 @@ end
 --------------------------------------------------------------------------------
 -- Шаг 3: Обнаружение тишины (ffmpeg silencedetect)
 --------------------------------------------------------------------------------
+local function auto_detect_threshold(video_path)
+    local log = get_logger()
+    log:info("Автоопределение порога тишины...")
+
+    local cmd = string.format('ffmpeg -i "%s" -af "volumedetect" -f null - 2>&1', video_path)
+    local output = shell_exec(cmd)
+
+    local mean_vol = output:match("mean_volume:%s*([-%.%d]+)%s*dB")
+    if mean_vol then
+        mean_vol = tonumber(mean_vol)
+        local threshold = math.floor(mean_vol + 3 + 0.5)
+        log:info(string.format("  Средняя громкость: %.1f дБ → порог: %d дБ", mean_vol, threshold))
+        return threshold
+    end
+
+    log:warning("  Не удалось определить громкость — используется -40 дБ")
+    return -40
+end
+
 local function detect_silence(video_path, threshold_db, min_duration_ms, working_dir)
     local log = get_logger()
     threshold_db = threshold_db or -40
@@ -1140,6 +1159,25 @@ local function load_keep_segments(working_dir)
     local data = json.decode(content)
     if not data or not data.segments then return {} end
     return data.segments
+end
+
+local function auto_switch_intervals(keep_segments)
+    local log = get_logger()
+    if not keep_segments or #keep_segments == 0 then
+        log:info("Нет сегментов — используются интервалы по умолчанию (5-15с)")
+        return 5, 15
+    end
+    local total_dur = 0
+    for _, seg in ipairs(keep_segments) do
+        total_dur = total_dur + (seg[2] - seg[1]) / 1000.0
+    end
+    local avg_dur = total_dur / #keep_segments
+    local min_iv = math.max(3, math.floor(avg_dur / 4 + 0.5))
+    local max_iv = math.max(min_iv + 1, math.floor(avg_dur / 2 + 0.5))
+    max_iv = math.min(max_iv, 30)
+    log:info(string.format("Автоинтервалы переключения: %d-%dс (средний сегмент: %.1fс)",
+        min_iv, max_iv, avg_dur))
+    return min_iv, max_iv
 end
 
 --------------------------------------------------------------------------------
@@ -1565,7 +1603,10 @@ local function build_and_run_ui()
     local settings_group = ui:VGroup({ID = "SettingsGroup"}, {
         ui:Label({Text = "Настройки", Weight = 0, Font = ui:Font({Family = "Arial", PixelSize = 14})}),
         ui:HGroup({
-            ui:Label({Text = "Порог тишины дБ:", Weight = 0, MinimumSize = {140, 0}}),
+            ui:CheckBox({ID = "SilenceManual", Text = "Порог тишины вручную", Weight = 0}),
+        }),
+        ui:HGroup({ID = "SilenceRow"}, {
+            ui:Label({Text = "Порог дБ:", Weight = 0, MinimumSize = {140, 0}}),
             ui:SpinBox({ID = "SilenceDb", Minimum = -80, Maximum = 0, Value = -40}),
             ui:Label({Text = "Мин. мс:", Weight = 0}),
             ui:SpinBox({ID = "SilenceMs", Minimum = 100, Maximum = 5000, Value = 500, SingleStep = 100}),
@@ -1577,6 +1618,9 @@ local function build_and_run_ui()
             ui:DoubleSpinBox({ID = "ZoomMax", Minimum = 1.0, Maximum = 2.0, Value = 1.3, SingleStep = 0.05}),
         }),
         ui:HGroup({
+            ui:CheckBox({ID = "SwitchManual", Text = "Переключение вручную", Weight = 0}),
+        }),
+        ui:HGroup({ID = "SwitchRow"}, {
             ui:Label({Text = "Переключ. сек:", Weight = 0, MinimumSize = {140, 0}}),
             ui:SpinBox({ID = "SwitchMin", Minimum = 1, Maximum = 60, Value = 5}),
             ui:Label({Text = "—", Weight = 0}),
@@ -1642,12 +1686,16 @@ local function build_and_run_ui()
         items.WorkingDir.Text = config:get("working_dir", "")
         items.TransitionPath.Text = config:get("transition_video_path", "")
         items.TitleBgPath.Text = config:get("title_background_path", "")
+        items.SilenceManual.Checked = config:get("silence_manual", false)
         items.SilenceDb.Value = config:get("silence_threshold_db", -40)
         items.SilenceMs.Value = config:get("silence_min_duration_ms", 500)
+        items.SilenceRow.Hidden = not config:get("silence_manual", false)
         items.ZoomMin.Value = config:get("zoom_min", 1.0)
         items.ZoomMax.Value = config:get("zoom_max", 1.3)
+        items.SwitchManual.Checked = config:get("multicam_manual", false)
         items.SwitchMin.Value = config:get("multicam_min_interval", 5)
         items.SwitchMax.Value = config:get("multicam_max_interval", 15)
+        items.SwitchRow.Hidden = not config:get("multicam_manual", false)
 
         for _, st in ipairs(STEPS) do
             local status = config:get_step_status(st.key)
@@ -1662,10 +1710,12 @@ local function build_and_run_ui()
         config:set("working_dir", items.WorkingDir.Text)
         config:set("transition_video_path", items.TransitionPath.Text)
         config:set("title_background_path", items.TitleBgPath.Text)
+        config:set("silence_manual", items.SilenceManual.Checked)
         config:set("silence_threshold_db", items.SilenceDb.Value)
         config:set("silence_min_duration_ms", items.SilenceMs.Value)
         config:set("zoom_min", items.ZoomMin.Value)
         config:set("zoom_max", items.ZoomMax.Value)
+        config:set("multicam_manual", items.SwitchManual.Checked)
         config:set("multicam_min_interval", items.SwitchMin.Value)
         config:set("multicam_max_interval", items.SwitchMax.Value)
         config:save()
@@ -1693,8 +1743,14 @@ local function build_and_run_ui()
     end
 
     step_runners["3_silence"] = function()
-        detect_silence(config:get("main_video_path"),
-            config:get("silence_threshold_db", -40),
+        local video_path = config:get("main_video_path")
+        local threshold
+        if config:get("silence_manual", false) then
+            threshold = config:get("silence_threshold_db", -40)
+        else
+            threshold = auto_detect_threshold(video_path)
+        end
+        detect_silence(video_path, threshold,
             config:get("silence_min_duration_ms", 500),
             config:get("working_dir"))
     end
@@ -1729,9 +1785,15 @@ local function build_and_run_ui()
             get_logger():info("Скринкаст отсутствует — пропускаем мультикамеру"); return
         end
         local keep = load_keep_segments(config:get("working_dir"))
+        local min_iv, max_iv
+        if config:get("multicam_manual", false) then
+            min_iv = config:get("multicam_min_interval", 5)
+            max_iv = config:get("multicam_max_interval", 15)
+        else
+            min_iv, max_iv = auto_switch_intervals(keep)
+        end
         distribute_multicam(clips.screencast, keep,
-            config:get("multicam_min_interval", 5),
-            config:get("multicam_max_interval", 15), get_fps(),
+            min_iv, max_iv, get_fps(),
             config:get("audio_offset_ms", 0))
     end
 
@@ -1816,6 +1878,13 @@ local function build_and_run_ui()
         if folder then path = fusion:RequestDir()
         else path = fusion:RequestFile() end
         if path then items[field_id].Text = tostring(path) end
+    end
+
+    function win.On.SilenceManual.Clicked(ev)
+        items.SilenceRow.Hidden = not items.SilenceManual.Checked
+    end
+    function win.On.SwitchManual.Clicked(ev)
+        items.SwitchRow.Hidden = not items.SwitchManual.Checked
     end
 
     function win.On.BrowseMainVideo.Clicked(ev) browse("MainVideoPath") end

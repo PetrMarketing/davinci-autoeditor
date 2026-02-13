@@ -11,6 +11,39 @@ import tempfile
 from utils.logger import get_logger
 
 
+def auto_detect_threshold(video_path):
+    """
+    Автоматически определить порог тишины по средней громкости файла.
+
+    Использует ffmpeg volumedetect для получения mean_volume,
+    затем устанавливает порог = mean_volume + 3 дБ.
+
+    Возвращает:
+        Порог в дБ (int), например -35.
+    """
+    log = get_logger()
+    log.info("Автоопределение порога тишины...")
+
+    cmd = [
+        "ffmpeg", "-i", video_path,
+        "-af", "volumedetect",
+        "-f", "null", "-",
+    ]
+    import re
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    output = result.stderr
+
+    match = re.search(r"mean_volume:\s*([-\d.]+)\s*dB", output)
+    if match:
+        mean_vol = float(match.group(1))
+        threshold = int(round(mean_vol + 3))
+        log.info(f"  Средняя громкость: {mean_vol:.1f} дБ → порог: {threshold} дБ")
+        return threshold
+
+    log.warning("  Не удалось определить громкость — используется -40 дБ")
+    return -40
+
+
 def detect_silence(video_path, threshold_db=-40, min_duration_ms=500, working_dir=""):
     """
     Обнаружить участки тишины в аудиодорожке видеофайла.
