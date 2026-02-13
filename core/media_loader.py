@@ -5,7 +5,7 @@
 
 import os
 from utils.logger import get_logger
-from core.resolve_api import get_media_pool, find_bin
+from core.resolve_api import get_media_pool, get_current_project, find_bin
 
 
 def import_media(main_video_path, screencast_path=""):
@@ -54,6 +54,15 @@ def import_media(main_video_path, screencast_path=""):
             log.warning(f"Не удалось импортировать скринкаст: {screencast_path}")
     elif screencast_path:
         log.warning(f"Файл скринкаста не найден: {screencast_path}")
+
+    # Создаём таймлайн и размещаем основной клип на V1
+    tl_name = "AutoEditor_Timeline"
+    tl = mp.CreateTimelineFromClips(tl_name, [main_clip])
+    if tl:
+        get_current_project().SetCurrentTimeline(tl)
+        log.info(f"Таймлайн создан: {tl_name} (основной клип на V1)")
+    else:
+        log.warning("Не удалось создать таймлайн автоматически")
 
     log.info(f"Шаг 1 завершён: импортировано клипов: {len(result)}")
     return result

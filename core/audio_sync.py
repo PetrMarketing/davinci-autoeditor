@@ -15,6 +15,11 @@ from utils.logger import get_logger
 def _detect_first_sound(file_path, threshold_db=-30):
     """Определить момент первого звука в файле через ffmpeg silencedetect."""
     log = get_logger()
+
+    if not os.path.isfile(file_path):
+        log.warning(f"  Файл не найден: {file_path}")
+        return 0.0
+
     cmd = [
         "ffmpeg", "-i", file_path,
         "-af", f"silencedetect=n={threshold_db}dB:d=0.1",
@@ -22,9 +27,19 @@ def _detect_first_sound(file_path, threshold_db=-30):
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     output = result.stderr
+
+    if result.returncode != 0 and not output:
+        log.warning(f"  ffmpeg ошибка (код {result.returncode}). Проверьте, что ffmpeg установлен.")
+        return 0.0
+
     match = re.search(r"silence_end:\s*([\d.]+)", output)
     if match:
         return float(match.group(1))
+
+    # Проверяем, был ли вообще анализ
+    if "silencedetect" not in output:
+        log.warning(f"  ffmpeg: silencedetect не запустился для {os.path.basename(file_path)}")
+
     return 0.0
 
 
@@ -61,8 +76,18 @@ def auto_sync_audio(clips_dict, config=None):
     main_path = main_clip.GetClipProperty("File Path") or ""
     sc_path = screencast_clip.GetClipProperty("File Path") or ""
 
+    log.info(f"  Путь основного: {main_path}")
+    log.info(f"  Путь скринкаста: {sc_path}")
+
     if not main_path or not sc_path:
         log.warning("Не удалось получить пути к файлам — пропуск синхронизации")
+        return 0
+
+    if not os.path.isfile(main_path):
+        log.warning(f"Файл не найден: {main_path}")
+        return 0
+    if not os.path.isfile(sc_path):
+        log.warning(f"Файл не найден: {sc_path}")
         return 0
 
     # Определяем момент первого звука

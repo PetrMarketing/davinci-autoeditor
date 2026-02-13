@@ -24,6 +24,10 @@ def auto_detect_threshold(video_path):
     log = get_logger()
     log.info("Автоопределение порога тишины...")
 
+    if not os.path.isfile(video_path):
+        log.warning(f"  Файл не найден: {video_path} — используется -40 дБ")
+        return -40
+
     cmd = [
         "ffmpeg", "-i", video_path,
         "-af", "volumedetect",
@@ -59,7 +63,12 @@ def detect_silence(video_path, threshold_db=-40, min_duration_ms=500, working_di
     """
     log = get_logger()
     log.info(f"Обнаружение тишины в: {os.path.basename(video_path)}")
+    log.info(f"  Полный путь: {video_path}")
     log.info(f"  Порог: {threshold_db} дБ, мин. длительность: {min_duration_ms} мс")
+
+    if not os.path.isfile(video_path):
+        log.error(f"  Файл не найден: {video_path}")
+        return []
 
     # Извлечение аудио в WAV с помощью ffmpeg
     wav_path = tempfile.mktemp(suffix=".wav")

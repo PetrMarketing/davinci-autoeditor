@@ -669,6 +669,17 @@ local function import_media(main_video_path, screencast_path)
         end
     end
 
+    -- Создаём таймлайн и размещаем основной клип на V1
+    local project = get_current_project()
+    local tl_name = "AutoEditor_Timeline"
+    local tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
+    if tl then
+        project:SetCurrentTimeline(tl)
+        log:info("Таймлайн создан: " .. tl_name .. " (основной клип на V1)")
+    else
+        log:warning("Не удалось создать таймлайн автоматически")
+    end
+
     log:info("Шаг 1 завершён: импортировано клипов: " .. (result.screencast and 2 or 1))
     return result
 end
@@ -697,14 +708,28 @@ end
 --- Найти момент первого звука в файле через silencedetect.
 --- @return число секунд до первого звука
 local function detect_first_sound(file_path, threshold_db)
+    local log = get_logger()
     threshold_db = threshold_db or -30
+    log:info("  Путь к файлу: " .. tostring(file_path))
+    if not file_exists(file_path) then
+        log:warning("  Файл не найден: " .. tostring(file_path))
+        return 0.0
+    end
     local cmd = string.format(
-        'ffmpeg -i "%s" -af "silencedetect=n=%ddB:d=0.1" -t 120 -f null - 2>&1',
+        'ffmpeg -i "%s" -af "silencedetect=n=%ddB:d=0.1" -t 120 -f null -',
         file_path, threshold_db)
-    local output = shell_exec(cmd)
+    local output, code = shell_exec(cmd)
+    if code ~= 0 and (not output or output == "") then
+        log:warning("  ffmpeg не удалось выполнить (код " .. tostring(code) .. ")")
+        return 0.0
+    end
     -- silence_end — момент, когда тишина закончилась (= начало звука)
     local first = output:match("silence_end:%s*([%d%.]+)")
     if first then return tonumber(first) end
+    -- Если silence_end не найден — проверяем, был ли вообще анализ
+    if not output:match("silencedetect") then
+        log:warning("  ffmpeg: silencedetect не запустился — возможно файл повреждён")
+    end
     return 0.0 -- если тишины нет — звук с самого начала
 end
 
@@ -805,7 +830,12 @@ local function auto_detect_threshold(video_path)
     local log = get_logger()
     log:info("Автоопределение порога тишины...")
 
-    local cmd = string.format('ffmpeg -i "%s" -af "volumedetect" -f null - 2>&1', video_path)
+    if not file_exists(video_path) then
+        log:warning("  Файл не найден: " .. tostring(video_path))
+        return -40
+    end
+
+    local cmd = string.format('ffmpeg -i "%s" -af "volumedetect" -f null -', video_path)
     local output = shell_exec(cmd)
 
     local mean_vol = output:match("mean_volume:%s*([-%.%d]+)%s*dB")
@@ -826,16 +856,27 @@ local function detect_silence(video_path, threshold_db, min_duration_ms, working
     min_duration_ms = min_duration_ms or 500
 
     log:info("Обнаружение тишины в: " .. basename(video_path))
+    log:info("  Полный путь: " .. tostring(video_path))
     log:info(string.format("  Порог: %d дБ, мин. длительность: %d мс", threshold_db, min_duration_ms))
+
+    if not file_exists(video_path) then
+        log:error("  Файл не найден: " .. tostring(video_path))
+        return {}
+    end
 
     local min_dur_sec = min_duration_ms / 1000.0
     local cmd = string.format(
-        'ffmpeg -i "%s" -af "silencedetect=n=%ddB:d=%.3f" -f null - 2>&1',
+        'ffmpeg -i "%s" -af "silencedetect=n=%ddB:d=%.3f" -f null -',
         video_path, threshold_db, min_dur_sec
     )
 
     log:info("Извлечение и анализ аудио через ffmpeg...")
-    local output = shell_exec(cmd)
+    local output, code = shell_exec(cmd)
+
+    if not output or output == "" then
+        log:error("  ffmpeg не вернул вывод (код " .. tostring(code) .. "). Проверьте, что ffmpeg установлен и доступен.")
+        return {}
+    end
 
     -- Определяем общую длительность
     local total_duration_ms = 0
