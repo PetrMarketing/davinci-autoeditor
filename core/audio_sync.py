@@ -1,7 +1,7 @@
 """
 Шаг 2: Синхронизация аудио по звуковой волне через ffmpeg.
 Определяет смещение между основным видео и скринкастом по первому звуку,
-физически выравнивает V2 на таймлайне (как Automatically Align Clips → Waveform),
+физически выравнивает V2 на таймлайне (удаляет V2-клипы и переставляет со смещением),
 сохраняет смещение для шага 8 (мультикамера).
 """
 
@@ -38,7 +38,6 @@ def _detect_first_sound(file_path, threshold_db=-30):
     if match:
         return float(match.group(1))
 
-    # Проверяем, был ли вообще анализ
     if "silencedetect" not in output:
         log.warning(f"  ffmpeg: silencedetect не запустился для {os.path.basename(file_path)}")
 
@@ -50,7 +49,7 @@ def auto_sync_audio(clips_dict, config=None):
     Синхронизировать аудио между основным видео и скринкастом по звуковой волне.
 
     Определяет смещение по моменту первого звука в каждом файле,
-    физически выравнивает V2 на таймлайне путём пересоздания таймлайна,
+    физически выравнивает V2 на таймлайне (удаляет V2-клипы + переставляет со смещением),
     затем отключает аудио V2.
 
     Аргументы:
@@ -78,9 +77,6 @@ def auto_sync_audio(clips_dict, config=None):
 
     main_path = main_clip.GetClipProperty("File Path") or ""
     sc_path = screencast_clip.GetClipProperty("File Path") or ""
-
-    log.info(f"  Путь основного: {main_path}")
-    log.info(f"  Путь скринкаста: {sc_path}")
 
     if not main_path or not sc_path:
         log.warning("Не удалось получить пути к файлам — пропуск синхронизации")
@@ -111,57 +107,57 @@ def auto_sync_audio(clips_dict, config=None):
         log.info("Смещение минимальное — клипы уже синхронизированы")
         offset_ms = 0
 
-    # Физическое выравнивание V2 на таймлайне
+    # Физическое выравнивание V2
     try:
         from core.resolve_api import (
             get_current_timeline, get_current_project, get_media_pool, get_fps,
         )
 
         timeline = get_current_timeline()
-        project = get_current_project()
         mp = get_media_pool()
 
         if timeline and offset_ms != 0:
-            tl_name = timeline.GetName()
             fps = get_fps()
             offset_frames = ms_to_frames(abs(offset_ms), fps)
+            start_frame = timeline.GetStartFrame()
 
-            log.info("Пересоздание таймлайна с выровненным скринкастом...")
+            # Удаляем V2-клипы (без ripple)
+            v2_items = timeline.GetItemListInTrack("video", 2)
+            if v2_items and len(v2_items) > 0:
+                try:
+                    timeline.DeleteClips(v2_items, False)
+                except Exception:
+                    log.warning("DeleteClips недоступен — пробуем пересоздание таймлайна")
+                    project = get_current_project()
+                    tl_name = timeline.GetName()
+                    try:
+                        mp.DeleteTimelines([timeline])
+                        new_tl = mp.CreateTimelineFromClips(tl_name, [main_clip])
+                        if new_tl:
+                            project.SetCurrentTimeline(new_tl)
+                            timeline = new_tl
+                            start_frame = new_tl.GetStartFrame()
+                            if new_tl.GetTrackCount("video") < 2:
+                                new_tl.AddTrack("video")
+                    except Exception as e:
+                        log.warning(f"Пересоздание не удалось: {e}")
 
-            # Удаляем старый таймлайн и создаём новый с правильным выравниванием
-            try:
-                mp.DeleteTimelines([timeline])
+            # Добавляем V2 со смещением
+            clip_info = {
+                "mediaPoolItem": screencast_clip,
+                "trackIndex": 2,
+            }
+            if offset_ms > 0:
+                clip_info["recordFrame"] = start_frame
+                clip_info["startFrame"] = offset_frames
+            else:
+                clip_info["recordFrame"] = start_frame + offset_frames
 
-                new_tl = mp.CreateTimelineFromClips(tl_name, [main_clip])
-                if new_tl:
-                    project.SetCurrentTimeline(new_tl)
-                    start_frame = new_tl.GetStartFrame()
-
-                    if new_tl.GetTrackCount("video") < 2:
-                        new_tl.AddTrack("video")
-
-                    clip_info = {
-                        "mediaPoolItem": screencast_clip,
-                        "trackIndex": 2,
-                    }
-
-                    if offset_ms > 0:
-                        # Скринкаст начал запись раньше → обрезаем начало скринкаста
-                        clip_info["recordFrame"] = start_frame
-                        clip_info["startFrame"] = offset_frames
-                    else:
-                        # Основное видео начало раньше → размещаем скринкаст позже
-                        clip_info["recordFrame"] = start_frame + offset_frames
-
-                    sc_ok = mp.AppendToTimeline([clip_info])
-                    if sc_ok:
-                        log.info(f"Скринкаст выровнен на V2 (смещение: {offset_ms} мс, {offset_frames} кадров)")
-                    else:
-                        log.warning("Не удалось добавить выровненный скринкаст на V2")
-                else:
-                    log.warning("Не удалось пересоздать таймлайн")
-            except Exception as e:
-                log.warning(f"DeleteTimelines не поддерживается — смещение будет применено при мультикамере: {e}")
+            sc_ok = mp.AppendToTimeline([clip_info])
+            if sc_ok:
+                log.info(f"Скринкаст выровнен на V2 (смещение: {offset_ms} мс)")
+            else:
+                log.warning("Не удалось добавить выровненный скринкаст на V2")
 
         elif timeline and offset_ms == 0:
             log.info("Клипы уже синхронизированы — таймлайн не изменён")

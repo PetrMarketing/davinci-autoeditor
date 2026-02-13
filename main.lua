@@ -208,15 +208,18 @@ local function shell_exec(cmd)
     if not IS_WINDOWS then
         cmd = 'PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH" ' .. cmd
     end
-    local handle = io.popen(cmd .. " 2>&1")
-    if not handle then return "", -1 end
-    local result = handle:read("*a")
-    local ok, _, code = handle:close()
-    return result or "", (code or (ok and 0 or 1))
+    -- os.execute + temp файл вместо io.popen (io.popen заблокирован в Resolve на macOS)
+    local tmp = os.tmpname()
+    local raw = os.execute(cmd .. ' > "' .. tmp .. '" 2>&1')
+    local result = read_file(tmp) or ""
+    os.remove(tmp)
+    -- Lua 5.1: os.execute возвращает число (0=успех); Lua 5.3+: bool, type, code
+    local code = (raw == true or raw == 0) and 0 or 1
+    return result, code
 end
 
 --- Поиск ffmpeg: проверяет стандартные пути, кеширует результат.
---- Логирование через print, т.к. get_logger определён позже в файле.
+--- Использует os.execute + temp файл (io.popen заблокирован в Resolve).
 local _ffmpeg_path = nil
 local function find_ffmpeg()
     if _ffmpeg_path then return _ffmpeg_path end
@@ -232,18 +235,18 @@ local function find_ffmpeg()
             "ffmpeg",
         }
     end
+    local tmp = os.tmpname()
     for _, path in ipairs(candidates) do
-        local handle = io.popen('"' .. path .. '" -version 2>&1')
-        if handle then
-            local out = handle:read("*a") or ""
-            handle:close()
-            if out:match("ffmpeg version") then
-                _ffmpeg_path = path
-                print("[AutoEditor] Найден ffmpeg: " .. path)
-                return _ffmpeg_path
-            end
+        os.execute('"' .. path .. '" -version > "' .. tmp .. '" 2>&1')
+        local out = read_file(tmp) or ""
+        if out:match("ffmpeg version") then
+            _ffmpeg_path = path
+            print("[AutoEditor] Найден ffmpeg: " .. path)
+            os.remove(tmp)
+            return _ffmpeg_path
         end
     end
+    os.remove(tmp)
     print("[AutoEditor] ВНИМАНИЕ: ffmpeg не найден! Установите: brew install ffmpeg (macOS) или https://ffmpeg.org")
     _ffmpeg_path = "ffmpeg"
     return _ffmpeg_path
@@ -827,6 +830,7 @@ end
 
 local function auto_sync_audio(clips_dict, config)
     local log = get_logger()
+    local mp = get_media_pool()
     local main_clip = clips_dict.main
     local screencast_clip = clips_dict.screencast
 
@@ -840,7 +844,7 @@ local function auto_sync_audio(clips_dict, config)
     log:info("  Основной: " .. main_clip:GetName())
     log:info("  Скринкаст: " .. screencast_clip:GetName())
 
-    -- Получаем пути к файлам
+    -- Определяем смещение через ffmpeg (silencedetect → первый звук)
     local main_path = main_clip:GetClipProperty("File Path") or ""
     local sc_path = screencast_clip:GetClipProperty("File Path") or ""
 
@@ -849,7 +853,6 @@ local function auto_sync_audio(clips_dict, config)
         return 0
     end
 
-    -- Находим момент первого звука в каждом файле
     log:info("Анализ звуковой волны основного видео...")
     local main_onset = detect_first_sound(main_path)
     log:info(string.format("  Первый звук (основное): %.3f с", main_onset))
@@ -858,7 +861,6 @@ local function auto_sync_audio(clips_dict, config)
     local sc_onset = detect_first_sound(sc_path)
     log:info(string.format("  Первый звук (скринкаст): %.3f с", sc_onset))
 
-    -- Смещение: положительное = скринкаст начал запись раньше
     local offset_sec = sc_onset - main_onset
     local offset_ms = math.floor(offset_sec * 1000 + 0.5)
 
@@ -869,57 +871,57 @@ local function auto_sync_audio(clips_dict, config)
         offset_ms = 0
     end
 
-    -- Физическое выравнивание V2 на таймлайне (как Automatically Align Clips → Waveform)
-    local mp = get_media_pool()
-    local project = get_current_project()
+    -- Физическое выравнивание V2: удаляем V2-клипы и переставляем со смещением
     local timeline = get_current_timeline()
 
     if timeline and offset_ms ~= 0 then
-        local tl_name = timeline:GetName()
         local fps = get_fps()
         local offset_frames = ms_to_frames(math.abs(offset_ms), fps)
+        local start_frame = timeline:GetStartFrame()
 
-        log:info("Пересоздание таймлайна с выровненным скринкастом...")
-
-        -- Удаляем старый таймлайн и создаём новый с правильным выравниванием
-        local del_ok = pcall(function() mp:DeleteTimelines({timeline}) end)
-
-        if del_ok then
-            local new_tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
-            if new_tl then
-                project:SetCurrentTimeline(new_tl)
-                local start_frame = new_tl:GetStartFrame()
-
-                if new_tl:GetTrackCount("video") < 2 then
-                    new_tl:AddTrack("video")
+        -- Удаляем текущие клипы на V2 (без ripple — V1 остаётся на месте)
+        local v2_items = timeline:GetItemListInTrack("video", 2)
+        if v2_items and #v2_items > 0 then
+            log:info("Удаление V2 клипов для переразмещения со смещением...")
+            local del_ok = pcall(function() timeline:DeleteClips(v2_items, false) end)
+            if not del_ok then
+                log:warning("DeleteClips недоступен — пробуем пересоздание таймлайна...")
+                -- Фоллбэк: удалить таймлайн целиком и пересоздать
+                local tl_name = timeline:GetName()
+                local project = get_current_project()
+                pcall(function() mp:DeleteTimelines({timeline}) end)
+                local new_tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
+                if new_tl then
+                    project:SetCurrentTimeline(new_tl)
+                    timeline = new_tl
+                    start_frame = new_tl:GetStartFrame()
+                    if new_tl:GetTrackCount("video") < 2 then
+                        new_tl:AddTrack("video")
+                    end
                 end
-
-                local clip_info = {
-                    mediaPoolItem = screencast_clip,
-                    trackIndex = 2,
-                }
-
-                if offset_ms > 0 then
-                    -- Скринкаст начал запись раньше → обрезаем начало скринкаста
-                    clip_info.recordFrame = start_frame
-                    clip_info.startFrame = offset_frames
-                else
-                    -- Основное видео начало раньше → размещаем скринкаст позже
-                    clip_info.recordFrame = start_frame + offset_frames
-                end
-
-                local sc_ok = mp:AppendToTimeline({clip_info})
-                if sc_ok then
-                    log:info(string.format("Скринкаст выровнен на V2 (смещение: %d мс, %d кадров)",
-                        offset_ms, offset_frames))
-                else
-                    log:warning("Не удалось добавить выровненный скринкаст на V2")
-                end
-            else
-                log:warning("Не удалось пересоздать таймлайн")
             end
+        end
+
+        -- Добавляем V2 с правильным смещением
+        local clip_info = {
+            mediaPoolItem = screencast_clip,
+            trackIndex = 2,
+        }
+        if offset_ms > 0 then
+            -- Скринкаст начал запись раньше → обрезаем начало скринкаста
+            clip_info.recordFrame = start_frame
+            clip_info.startFrame = offset_frames
         else
-            log:warning("DeleteTimelines не поддерживается — смещение будет применено при мультикамере")
+            -- Основное видео начало раньше → размещаем скринкаст позже
+            clip_info.recordFrame = start_frame + offset_frames
+        end
+
+        local sc_ok = mp:AppendToTimeline({clip_info})
+        if sc_ok then
+            log:info(string.format("Скринкаст выровнен на V2 (смещение: %d мс, %d кадров)",
+                offset_ms, offset_frames))
+        else
+            log:warning("Не удалось добавить выровненный скринкаст на V2")
         end
     elseif timeline and offset_ms == 0 then
         log:info("Клипы уже синхронизированы — таймлайн не изменён")
@@ -932,13 +934,12 @@ local function auto_sync_audio(clips_dict, config)
         log:info("Аудио V2 отключено после синхронизации")
     end
 
-    -- Сохраняем смещение в конфиг для мультикамеры
+    -- Сохраняем смещение
     if config then
         config:set("audio_offset_ms", offset_ms)
         config:save()
     end
 
-    -- Сохраняем в JSON для справки
     local working_dir = config and config:get("working_dir", "") or ""
     if working_dir ~= "" then
         local data = {
@@ -1065,6 +1066,25 @@ local function load_silence_regions(working_dir)
     local data = json.decode(content)
     if not data or not data.regions then return {} end
     return data.regions
+end
+
+--- Применить отступы (padding) к регионам тишины, как в AutoCut.
+--- padding_before: мс, сохраняемые перед началом речи (конец тишины)
+--- padding_after: мс, сохраняемые после окончания речи (начало тишины)
+local function apply_silence_padding(silence_regions, padding_before_ms, padding_after_ms)
+    padding_before_ms = padding_before_ms or 0
+    padding_after_ms = padding_after_ms or 0
+    if padding_before_ms == 0 and padding_after_ms == 0 then return silence_regions end
+    local padded = {}
+    for _, r in ipairs(silence_regions) do
+        -- Сжимаем регион тишины, оставляя отступы для речи
+        local new_start = r[1] + padding_after_ms  -- после предыдущей речи
+        local new_end = r[2] - padding_before_ms    -- перед следующей речью
+        if new_end > new_start then
+            padded[#padded + 1] = {new_start, new_end}
+        end
+    end
+    return padded
 end
 
 --- Расставить маркеры на таймлайне в местах тишины (как в AutoCut).
@@ -1290,12 +1310,21 @@ end
 --------------------------------------------------------------------------------
 -- Шаг 4: Нарезка тишины (только по регионам тишины, без ИИ)
 --------------------------------------------------------------------------------
-local function compute_silence_keep_segments(working_dir, total_duration_ms, fps)
+local function compute_silence_keep_segments(working_dir, total_duration_ms, fps, pad_before_ms, pad_after_ms)
     local log = get_logger()
     fps = fps or 25.0
+    pad_before_ms = pad_before_ms or 0
+    pad_after_ms = pad_after_ms or 0
 
     local silence_regions = load_silence_regions(working_dir)
     log:info("Загружено " .. #silence_regions .. " регионов тишины")
+
+    -- Применяем отступы (как в AutoCut)
+    if pad_before_ms > 0 or pad_after_ms > 0 then
+        silence_regions = apply_silence_padding(silence_regions, pad_before_ms, pad_after_ms)
+        log:info(string.format("Применены отступы: %d мс до речи, %d мс после речи → %d регионов",
+            pad_before_ms, pad_after_ms, #silence_regions))
+    end
 
     local keep_segments = invert_regions(silence_regions, total_duration_ms)
     log:info("Сегментов для сохранения: " .. #keep_segments)
@@ -1951,6 +1980,12 @@ local function build_and_run_ui()
             ui:SpinBox({ID = "SilenceMs", Minimum = 100, Maximum = 5000, Value = 500, SingleStep = 100}),
         }),
         ui:HGroup({
+            ui:Label({Text = "Отступ до речи:", Weight = 0, MinimumSize = {140, 0}}),
+            ui:SpinBox({ID = "PadBefore", Minimum = 0, Maximum = 1000, Value = 100, SingleStep = 50}),
+            ui:Label({Text = "мс, после:", Weight = 0}),
+            ui:SpinBox({ID = "PadAfter", Minimum = 0, Maximum = 1000, Value = 100, SingleStep = 50}),
+        }),
+        ui:HGroup({
             ui:Label({Text = "Масштаб:", Weight = 0, MinimumSize = {140, 0}}),
             ui:DoubleSpinBox({ID = "ZoomMin", Minimum = 1.0, Maximum = 2.0, Value = 1.0, SingleStep = 0.05}),
             ui:Label({Text = "—", Weight = 0}),
@@ -2029,6 +2064,8 @@ local function build_and_run_ui()
         items.SilenceDb.Value = config:get("silence_threshold_db", -40)
         items.SilenceMs.Value = config:get("silence_min_duration_ms", 500)
         items.SilenceRow.Hidden = not config:get("silence_manual", false)
+        items.PadBefore.Value = config:get("padding_before_ms", 100)
+        items.PadAfter.Value = config:get("padding_after_ms", 100)
         items.ZoomMin.Value = config:get("zoom_min", 1.0)
         items.ZoomMax.Value = config:get("zoom_max", 1.3)
         items.SwitchManual.Checked = config:get("multicam_manual", false)
@@ -2052,6 +2089,8 @@ local function build_and_run_ui()
         config:set("silence_manual", items.SilenceManual.Checked)
         config:set("silence_threshold_db", items.SilenceDb.Value)
         config:set("silence_min_duration_ms", items.SilenceMs.Value)
+        config:set("padding_before_ms", items.PadBefore.Value)
+        config:set("padding_after_ms", items.PadAfter.Value)
         config:set("zoom_min", items.ZoomMin.Value)
         config:set("zoom_max", items.ZoomMax.Value)
         config:set("multicam_manual", items.SwitchManual.Checked)
@@ -2102,7 +2141,8 @@ local function build_and_run_ui()
         if not main_clip then error("Основной клип не найден в медиапуле") end
         local total_ms = get_clip_duration_ms(main_clip)
         local fps = get_fps()
-        local keep = compute_silence_keep_segments(config:get("working_dir"), total_ms, fps)
+        local keep = compute_silence_keep_segments(config:get("working_dir"), total_ms, fps,
+            config:get("padding_before_ms", 100), config:get("padding_after_ms", 100))
         rebuild_timeline(main_clip, keep, "AutoEditor_Clean", fps,
             clips.screencast, config:get("audio_offset_ms", 0))
     end
