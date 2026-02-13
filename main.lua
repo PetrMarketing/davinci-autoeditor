@@ -216,11 +216,11 @@ local function shell_exec(cmd)
 end
 
 --- Поиск ffmpeg: проверяет стандартные пути, кеширует результат.
+--- Логирование через print, т.к. get_logger определён позже в файле.
 local _ffmpeg_path = nil
 local function find_ffmpeg()
     if _ffmpeg_path then return _ffmpeg_path end
-    local log = get_logger()
-    log:info("Поиск ffmpeg...")
+    print("[AutoEditor] Поиск ffmpeg...")
     local candidates
     if IS_WINDOWS then
         candidates = {"ffmpeg", "C:\\ffmpeg\\bin\\ffmpeg"}
@@ -239,13 +239,12 @@ local function find_ffmpeg()
             handle:close()
             if out:match("ffmpeg version") then
                 _ffmpeg_path = path
-                log:info("  Найден ffmpeg: " .. path)
+                print("[AutoEditor] Найден ffmpeg: " .. path)
                 return _ffmpeg_path
             end
         end
     end
-    log:warning("  ffmpeg не найден ни по одному из стандартных путей!")
-    log:warning("  Установите ffmpeg: brew install ffmpeg (macOS) или https://ffmpeg.org")
+    print("[AutoEditor] ВНИМАНИЕ: ffmpeg не найден! Установите: brew install ffmpeg (macOS) или https://ffmpeg.org")
     _ffmpeg_path = "ffmpeg"
     return _ffmpeg_path
 end
