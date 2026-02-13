@@ -56,13 +56,32 @@ def import_media(main_video_path, screencast_path=""):
         log.warning(f"Файл скринкаста не найден: {screencast_path}")
 
     # Создаём таймлайн и размещаем основной клип на V1
+    from core.resolve_api import get_timeline_by_name
     tl_name = "AutoEditor_Timeline"
-    tl = mp.CreateTimelineFromClips(tl_name, [main_clip])
-    if tl:
-        get_current_project().SetCurrentTimeline(tl)
-        log.info(f"Таймлайн создан: {tl_name} (основной клип на V1)")
+
+    # Проверяем, не существует ли уже такой таймлайн
+    existing_tl = get_timeline_by_name(tl_name)
+    if existing_tl:
+        get_current_project().SetCurrentTimeline(existing_tl)
+        log.info(f"Таймлайн уже существует: {tl_name} (используется существующий)")
     else:
-        log.warning("Не удалось создать таймлайн автоматически")
+        tl = mp.CreateTimelineFromClips(tl_name, [main_clip])
+        if tl:
+            get_current_project().SetCurrentTimeline(tl)
+            log.info(f"Таймлайн создан: {tl_name} (основной клип на V1)")
+        else:
+            # Альтернативный способ: создать пустой таймлайн и добавить клип
+            log.info("Пробуем альтернативный способ создания таймлайна...")
+            from core.resolve_api import create_timeline
+            tl = create_timeline(tl_name)
+            if tl:
+                appended = mp.AppendToTimeline([main_clip])
+                if appended:
+                    log.info(f"Таймлайн создан: {tl_name} (основной клип добавлен на V1)")
+                else:
+                    log.warning("Таймлайн создан, но клип не удалось добавить")
+            else:
+                log.warning("Не удалось создать таймлайн автоматически")
 
     log.info(f"Шаг 1 завершён: импортировано клипов: {len(result)}")
     return result

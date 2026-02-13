@@ -672,12 +672,42 @@ local function import_media(main_video_path, screencast_path)
     -- Создаём таймлайн и размещаем основной клип на V1
     local project = get_current_project()
     local tl_name = "AutoEditor_Timeline"
-    local tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
-    if tl then
-        project:SetCurrentTimeline(tl)
-        log:info("Таймлайн создан: " .. tl_name .. " (основной клип на V1)")
+
+    -- Проверяем, не существует ли уже такой таймлайн
+    local existing_tl = nil
+    local tl_count = project:GetTimelineCount()
+    for idx = 1, tl_count do
+        local t = project:GetTimelineByIndex(idx)
+        if t and t:GetName() == tl_name then
+            existing_tl = t
+            break
+        end
+    end
+
+    if existing_tl then
+        project:SetCurrentTimeline(existing_tl)
+        log:info("Таймлайн уже существует: " .. tl_name .. " (используется существующий)")
     else
-        log:warning("Не удалось создать таймлайн автоматически")
+        local tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
+        if tl then
+            project:SetCurrentTimeline(tl)
+            log:info("Таймлайн создан: " .. tl_name .. " (основной клип на V1)")
+        else
+            -- Альтернативный способ: создать пустой таймлайн и добавить клип
+            log:info("Пробуем альтернативный способ создания таймлайна...")
+            tl = mp:CreateEmptyTimeline(tl_name)
+            if tl then
+                project:SetCurrentTimeline(tl)
+                local appended = mp:AppendToTimeline({main_clip})
+                if appended then
+                    log:info("Таймлайн создан: " .. tl_name .. " (основной клип добавлен на V1)")
+                else
+                    log:warning("Таймлайн создан, но клип не удалось добавить")
+                end
+            else
+                log:warning("Не удалось создать таймлайн автоматически")
+            end
+        end
     end
 
     log:info("Шаг 1 завершён: импортировано клипов: " .. (result.screencast and 2 or 1))
