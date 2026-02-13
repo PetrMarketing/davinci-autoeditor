@@ -97,15 +97,6 @@ class AutoEditorWindow:
             ui.Label({"Text": "Настройки", "Weight": 0,
                        "Font": ui.Font({"Family": "Arial", "PixelSize": 14})}),
             ui.HGroup([
-                ui.Label({"Text": "API-ключ:", "Weight": 0, "MinimumSize": [140, 0]}),
-                ui.LineEdit({"ID": "ApiKey", "PlaceholderText": "API-ключ OpenRouter...",
-                             "EchoMode": "Password"}),
-            ]),
-            ui.HGroup([
-                ui.Label({"Text": "Модель ИИ:", "Weight": 0, "MinimumSize": [140, 0]}),
-                ui.LineEdit({"ID": "AiModel", "PlaceholderText": "google/gemini-2.0-flash-001"}),
-            ]),
-            ui.HGroup([
                 ui.Label({"Text": "Порог тишины дБ:", "Weight": 0, "MinimumSize": [140, 0]}),
                 ui.SpinBox({"ID": "SilenceDb", "Minimum": -80, "Maximum": 0, "Value": -40}),
                 ui.Label({"Text": "Мин. мс:", "Weight": 0}),
@@ -215,8 +206,6 @@ class AutoEditorWindow:
         items["WorkingDir"].Text = c.get("working_dir", "")
         items["TransitionPath"].Text = c.get("transition_video_path", "")
         items["TitleBgPath"].Text = c.get("title_background_path", "")
-        items["ApiKey"].Text = c.get("openrouter_api_key", "")
-        items["AiModel"].Text = c.get("openrouter_model", "google/gemini-2.0-flash-001")
         items["SilenceDb"].Value = c.get("silence_threshold_db", -40)
         items["SilenceMs"].Value = c.get("silence_min_duration_ms", 500)
         items["ZoomMin"].Value = c.get("zoom_min", 1.0)
@@ -238,8 +227,6 @@ class AutoEditorWindow:
         c.set("working_dir", items["WorkingDir"].Text)
         c.set("transition_video_path", items["TransitionPath"].Text)
         c.set("title_background_path", items["TitleBgPath"].Text)
-        c.set("openrouter_api_key", items["ApiKey"].Text)
-        c.set("openrouter_model", items["AiModel"].Text)
         c.set("silence_threshold_db", items["SilenceDb"].Value)
         c.set("silence_min_duration_ms", items["SilenceMs"].Value)
         c.set("zoom_min", items["ZoomMin"].Value)

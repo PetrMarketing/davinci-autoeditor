@@ -1487,14 +1487,6 @@ local function build_and_run_ui()
     local settings_group = ui:VGroup({ID = "SettingsGroup"}, {
         ui:Label({Text = "Настройки", Weight = 0, Font = ui:Font({Family = "Arial", PixelSize = 14})}),
         ui:HGroup({
-            ui:Label({Text = "API-ключ:", Weight = 0, MinimumSize = {140, 0}}),
-            ui:LineEdit({ID = "ApiKey", PlaceholderText = "API-ключ OpenRouter...", EchoMode = "Password"}),
-        }),
-        ui:HGroup({
-            ui:Label({Text = "Модель ИИ:", Weight = 0, MinimumSize = {140, 0}}),
-            ui:LineEdit({ID = "AiModel", PlaceholderText = "google/gemini-2.0-flash-001"}),
-        }),
-        ui:HGroup({
             ui:Label({Text = "Порог тишины дБ:", Weight = 0, MinimumSize = {140, 0}}),
             ui:SpinBox({ID = "SilenceDb", Minimum = -80, Maximum = 0, Value = -40}),
             ui:Label({Text = "Мин. мс:", Weight = 0}),
@@ -1572,8 +1564,6 @@ local function build_and_run_ui()
         items.WorkingDir.Text = config:get("working_dir", "")
         items.TransitionPath.Text = config:get("transition_video_path", "")
         items.TitleBgPath.Text = config:get("title_background_path", "")
-        items.ApiKey.Text = config:get("openrouter_api_key", "")
-        items.AiModel.Text = config:get("openrouter_model", "google/gemini-2.0-flash-001")
         items.SilenceDb.Value = config:get("silence_threshold_db", -40)
         items.SilenceMs.Value = config:get("silence_min_duration_ms", 500)
         items.ZoomMin.Value = config:get("zoom_min", 1.0)
@@ -1594,8 +1584,6 @@ local function build_and_run_ui()
         config:set("working_dir", items.WorkingDir.Text)
         config:set("transition_video_path", items.TransitionPath.Text)
         config:set("title_background_path", items.TitleBgPath.Text)
-        config:set("openrouter_api_key", items.ApiKey.Text)
-        config:set("openrouter_model", items.AiModel.Text)
         config:set("silence_threshold_db", items.SilenceDb.Value)
         config:set("silence_min_duration_ms", items.SilenceMs.Value)
         config:set("zoom_min", items.ZoomMin.Value)
