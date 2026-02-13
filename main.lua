@@ -688,49 +688,54 @@ local function import_media(main_video_path, screencast_path)
         project:SetCurrentTimeline(existing_tl)
         log:info("Таймлайн уже существует: " .. tl_name .. " (используется существующий)")
     else
-        -- Создаём таймлайн с основным клипом на V1
-        local tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
+        -- Создаём таймлайн с обоими клипами друг над другом (V1 + V2)
+        local clip_infos = {
+            { mediaPoolItem = main_clip, trackIndex = 1, mediaType = 1 },
+        }
+        if result.screencast then
+            clip_infos[#clip_infos + 1] = {
+                mediaPoolItem = result.screencast, trackIndex = 2, mediaType = 1,
+            }
+        end
+
+        local tl = mp:CreateTimelineFromClips(tl_name, clip_infos)
         if tl then
             project:SetCurrentTimeline(tl)
-            log:info("Таймлайн создан: " .. tl_name .. " (основной клип на V1)")
+            if result.screencast then
+                log:info("Таймлайн создан: " .. tl_name .. " (V1=камера, V2=скринкаст, друг над другом)")
+            else
+                log:info("Таймлайн создан: " .. tl_name .. " (основной клип на V1)")
+            end
         else
+            -- Альтернативный способ: пустой таймлайн + добавление по одному
             log:info("Пробуем альтернативный способ создания таймлайна...")
             tl = mp:CreateEmptyTimeline(tl_name)
             if tl then
                 project:SetCurrentTimeline(tl)
                 local appended = mp:AppendToTimeline({main_clip})
                 if appended then
-                    log:info("Таймлайн создан: " .. tl_name .. " (основной клип добавлен на V1)")
-                else
-                    log:warning("Таймлайн создан, но клип не удалось добавить")
+                    log:info("Основной клип добавлен на V1")
+                end
+                if result.screencast then
+                    if tl:GetTrackCount("video") < 2 then
+                        tl:AddTrack("video")
+                    end
+                    local sc_ok = mp:AppendToTimeline({
+                        { mediaPoolItem = result.screencast, trackIndex = 2, mediaType = 1 },
+                    })
+                    if sc_ok then
+                        log:info("Скринкаст добавлен на V2")
+                    else
+                        log:warning("Не удалось добавить скринкаст на V2")
+                    end
                 end
             else
                 log:warning("Не удалось создать таймлайн автоматически")
             end
         end
-
-        -- Добавляем скринкаст на V2 (если есть)
-        if result.screencast and tl then
-            log:info("Добавление скринкаста на V2...")
-            -- Добавляем видеодорожку V2 если нужно
-            if tl:GetTrackCount("video") < 2 then
-                tl:AddTrack("video")
-            end
-            local sc_info = {
-                mediaPoolItem = result.screencast,
-                startFrame = 0,
-                trackIndex = 2,
-                mediaType = 1,
-            }
-            local sc_ok = mp:AppendToTimeline({sc_info})
-            if sc_ok then
-                log:info("Скринкаст размещён на V2")
-                -- Отключаем аудио на V2 (используется аудио с V1)
-                tl:SetTrackEnable("audio", 2, false)
-                log:info("Аудио на V2 отключено (используется аудио основного видео)")
-            else
-                log:warning("Не удалось добавить скринкаст на V2")
-            end
+        -- Аудио V2 НЕ отключаем — оно нужно для синхронизации (шаг 2)
+        if result.screencast then
+            log:info("Аудио V2 оставлено включённым для синхронизации (шаг 2)")
         end
     end
 
@@ -871,6 +876,13 @@ local function auto_sync_audio(clips_dict, config)
         }
         write_file(join_path(working_dir, "audio_sync.json"), json.encode(data, true))
         log:info("Данные синхронизации сохранены в audio_sync.json")
+    end
+
+    -- После синхронизации отключаем аудио V2 (используется аудио основного видео)
+    local timeline = get_current_timeline()
+    if timeline and timeline:GetTrackCount("audio") >= 2 then
+        timeline:SetTrackEnable("audio", 2, false)
+        log:info("Аудио V2 отключено после синхронизации")
     end
 
     log:info(string.format("Шаг 2 завершён: смещение %d мс будет применено при мультикамере", offset_ms))

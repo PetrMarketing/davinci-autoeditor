@@ -142,5 +142,15 @@ def auto_sync_audio(clips_dict, config=None):
             json.dump(sync_data, f, indent=2)
         log.info(f"Данные синхронизации сохранены в audio_sync.json")
 
+    # После синхронизации отключаем аудио V2 (используется аудио основного видео)
+    try:
+        from core.resolve_api import get_current_timeline
+        timeline = get_current_timeline()
+        if timeline and timeline.GetTrackCount("audio") >= 2:
+            timeline.SetTrackEnable("audio", 2, False)
+            log.info("Аудио V2 отключено после синхронизации")
+    except Exception:
+        pass
+
     log.info(f"Шаг 2 завершён: смещение {offset_ms} мс будет применено при мультикамере")
     return offset_ms

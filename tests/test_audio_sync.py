@@ -98,10 +98,11 @@ class TestAutoSyncAudio(unittest.TestCase):
         })
         self.assertEqual(result, 0)
 
+    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
     @patch("core.audio_sync.subprocess.run")
-    def test_calculates_offset(self, mock_run, mock_detect, _):
+    def test_calculates_offset(self, mock_run, mock_detect, _, __):
         mock_detect.side_effect = [1.0, 3.5]
         mock_run.return_value = MagicMock()
 
@@ -111,10 +112,11 @@ class TestAutoSyncAudio(unittest.TestCase):
         })
         self.assertEqual(result, 2500)
 
+    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
     @patch("core.audio_sync.subprocess.run")
-    def test_small_offset_zeroed(self, mock_run, mock_detect, _):
+    def test_small_offset_zeroed(self, mock_run, mock_detect, _, __):
         mock_detect.side_effect = [1.000, 1.030]
         mock_run.return_value = MagicMock()
 
@@ -124,10 +126,11 @@ class TestAutoSyncAudio(unittest.TestCase):
         })
         self.assertEqual(result, 0)
 
+    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
     @patch("core.audio_sync.subprocess.run")
-    def test_saves_to_config(self, mock_run, mock_detect, _):
+    def test_saves_to_config(self, mock_run, mock_detect, _, __):
         mock_detect.side_effect = [0.5, 2.5]
         mock_run.return_value = MagicMock()
 
@@ -141,10 +144,11 @@ class TestAutoSyncAudio(unittest.TestCase):
 
         self.assertEqual(cfg.get("audio_offset_ms"), 2000)
 
+    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
     @patch("core.audio_sync.subprocess.run")
-    def test_saves_json_to_working_dir(self, mock_run, mock_detect, _):
+    def test_saves_json_to_working_dir(self, mock_run, mock_detect, _, __):
         mock_detect.side_effect = [1.0, 3.0]
         mock_run.return_value = MagicMock()
 
@@ -166,10 +170,11 @@ class TestAutoSyncAudio(unittest.TestCase):
         self.assertAlmostEqual(data["main_onset_sec"], 1.0)
         self.assertAlmostEqual(data["screencast_onset_sec"], 3.0)
 
+    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
     @patch("core.audio_sync.subprocess.run")
-    def test_negative_offset(self, mock_run, mock_detect, _):
+    def test_negative_offset(self, mock_run, mock_detect, _, __):
         mock_detect.side_effect = [5.0, 2.0]
         mock_run.return_value = MagicMock()
 
