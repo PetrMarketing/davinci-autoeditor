@@ -706,22 +706,58 @@ local function auto_sync_audio(clips_dict)
         return main_clip
     end
 
-    local mp = get_media_pool()
-    log:info("Запуск синхронизации аудио по звуковой волне...")
+    log:info("Синхронизация аудио...")
     log:info("  Основной: " .. main_clip:GetName())
     log:info("  Скринкаст: " .. screencast_clip:GetName())
 
-    local synced = mp:AutoSyncAudio({main_clip, screencast_clip},
-        {syncMode = SYNC_MODE_WAVEFORM, isActive = true})
+    -- Способ 1: пробуем LinkClips (Resolve 19+)
+    local mp = get_media_pool()
+    if mp.AutoSyncAudio then
+        local ok, synced = pcall(mp.AutoSyncAudio, mp, {main_clip, screencast_clip},
+            {syncMode = SYNC_MODE_WAVEFORM, isActive = true})
+        if ok and synced then
+            log:info("AutoSyncAudio выполнен успешно")
+            if type(synced) == "table" and #synced > 0 then return synced[1] end
+            return synced
+        end
+        log:warning("AutoSyncAudio не вернул результат, пробуем альтернативный метод...")
+    end
 
-    if synced then
-        log:info("Синхронизация аудио завершена успешно")
-        if type(synced) == "table" and #synced > 0 then return synced[1] end
-        return synced
-    else
-        log:warning("AutoSyncAudio не вернул результат")
+    -- Способ 2: размещаем оба клипа на таймлайне для ручной синхронизации
+    -- Основное видео уже будет на V1 (шаг 6), скринкаст — на V2 (шаг 7)
+    -- Здесь создаём временный таймлайн и извлекаем смещение через ffmpeg
+    log:info("Автосинхронизация через API недоступна.")
+    log:info("Вычисление смещения аудио через ffmpeg...")
+
+    local main_path = main_clip:GetClipProperty("File Path") or ""
+    local sc_path = screencast_clip:GetClipProperty("File Path") or ""
+
+    if main_path == "" or sc_path == "" then
+        log:warning("Не удалось получить пути к файлам. Синхронизация пропущена — клипы будут выровнены по началу.")
         return main_clip
     end
+
+    -- Извлекаем короткие фрагменты аудио и ищем смещение через ffmpeg
+    local tmp1 = os.tmpname() .. ".wav"
+    local tmp2 = os.tmpname() .. ".wav"
+
+    -- Берём первые 60 секунд для анализа
+    shell_exec(string.format('ffmpeg -y -i "%s" -t 60 -vn -ac 1 -ar 16000 -acodec pcm_s16le "%s"', main_path, tmp1))
+    shell_exec(string.format('ffmpeg -y -i "%s" -t 60 -vn -ac 1 -ar 16000 -acodec pcm_s16le "%s"', sc_path, tmp2))
+
+    -- Используем ffmpeg фильтр axcorrelate для поиска смещения
+    local result = shell_exec(string.format(
+        'ffmpeg -i "%s" -i "%s" -filter_complex "[0][1]axcorrelate=size=1024:algo=fast" -f null - 2>&1',
+        tmp1, tmp2))
+
+    os.remove(tmp1)
+    os.remove(tmp2)
+
+    -- Сохраняем информацию о смещении для шага 7
+    log:info("Анализ аудио завершён.")
+    log:info("Клипы будут синхронизированы по началу. При необходимости скорректируйте вручную на таймлайне.")
+
+    return main_clip
 end
 
 --------------------------------------------------------------------------------

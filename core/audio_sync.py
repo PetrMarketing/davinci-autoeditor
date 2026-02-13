@@ -1,17 +1,13 @@
 """
-Шаг 2: Автоматическая синхронизация аудио между основным видео и скринкастом
-с помощью анализа звуковой волны.
-Использует встроенную функцию Resolve AutoSyncAudio в режиме waveform.
+Шаг 2: Автоматическая синхронизация аудио между основным видео и скринкастом.
+Пробует встроенный AutoSyncAudio (если доступен в версии Resolve),
+иначе — выравнивает клипы по началу с предупреждением.
 """
 
 from utils.logger import get_logger
 from core.resolve_api import get_media_pool
 
-
-# Константы режимов AutoSyncAudio в Resolve
 SYNC_MODE_WAVEFORM = 0
-SYNC_MODE_TIMECODE = 1
-SYNC_MODE_IN_OUT = 2
 
 
 def auto_sync_audio(clips_dict):
@@ -22,7 +18,7 @@ def auto_sync_audio(clips_dict):
         clips_dict: dict с объектами MediaPoolItem по ключам 'main' и 'screencast'.
 
     Возвращает:
-        Синхронизированный клип (MediaPoolItem) или None, если клип только один.
+        Синхронизированный клип (MediaPoolItem) или основной клип при отсутствии скринкаста.
     """
     log = get_logger()
 
@@ -38,29 +34,28 @@ def auto_sync_audio(clips_dict):
 
     mp = get_media_pool()
 
-    log.info("Запуск синхронизации аудио по звуковой волне...")
+    log.info("Синхронизация аудио...")
     log.info(f"  Основной: {main_clip.GetName()}")
     log.info(f"  Скринкаст: {screencast_clip.GetName()}")
 
-    # AutoSyncAudio принимает список клипов и параметры синхронизации
-    clip_list = [main_clip, screencast_clip]
-    synced = mp.AutoSyncAudio(
-        clip_list,
-        {
-            "syncMode": SYNC_MODE_WAVEFORM,
-            "isActive": True,
-        },
-    )
+    # Способ 1: пробуем AutoSyncAudio (Resolve 19+)
+    if hasattr(mp, "AutoSyncAudio"):
+        try:
+            synced = mp.AutoSyncAudio(
+                [main_clip, screencast_clip],
+                {"syncMode": SYNC_MODE_WAVEFORM, "isActive": True},
+            )
+            if synced:
+                log.info("AutoSyncAudio выполнен успешно")
+                if isinstance(synced, list) and len(synced) > 0:
+                    return synced[0]
+                return synced
+            log.warning("AutoSyncAudio не вернул результат, пробуем альтернативный метод...")
+        except Exception as e:
+            log.warning(f"AutoSyncAudio вызвал ошибку: {e}")
 
-    if synced:
-        log.info("Синхронизация аудио завершена успешно")
-        # Синхронизированный клип заменяет или связывает исходные
-        if isinstance(synced, list) and len(synced) > 0:
-            return synced[0]
-        return synced
-    else:
-        log.warning(
-            "AutoSyncAudio не вернул результат. "
-            "Возможно, клипы требуют ручного выравнивания или аудиодорожки значительно отличаются."
-        )
-        return main_clip
+    # Способ 2: клипы будут выровнены по началу
+    log.info("Автосинхронизация через API недоступна в этой версии Resolve.")
+    log.info("Клипы будут синхронизированы по началу. При необходимости скорректируйте вручную на таймлайне.")
+
+    return main_clip
