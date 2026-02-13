@@ -1,7 +1,8 @@
 """
 Шаг 2: Синхронизация аудио по звуковой волне через ffmpeg.
 Определяет смещение между основным видео и скринкастом по первому звуку,
-нормализует уровни громкости, сохраняет смещение для шага 7 (мультикамера).
+физически выравнивает V2 на таймлайне (как Automatically Align Clips → Waveform),
+сохраняет смещение для шага 8 (мультикамера).
 """
 
 import json
@@ -10,6 +11,7 @@ import subprocess
 import re
 
 from utils.logger import get_logger
+from utils.timecode import ms_to_frames
 
 
 def _detect_first_sound(file_path, threshold_db=-30):
@@ -48,7 +50,8 @@ def auto_sync_audio(clips_dict, config=None):
     Синхронизировать аудио между основным видео и скринкастом по звуковой волне.
 
     Определяет смещение по моменту первого звука в каждом файле,
-    нормализует уровни громкости, сохраняет смещение для мультикамеры.
+    физически выравнивает V2 на таймлайне путём пересоздания таймлайна,
+    затем отключает аудио V2.
 
     Аргументы:
         clips_dict: dict с 'main' и 'screencast' (MediaPoolItem).
@@ -108,21 +111,68 @@ def auto_sync_audio(clips_dict, config=None):
         log.info("Смещение минимальное — клипы уже синхронизированы")
         offset_ms = 0
 
-    # Нормализация уровней громкости
-    log.info("Нормализация уровней звука...")
-    for label, path in [("Основное видео", main_path), ("Скринкаст", sc_path)]:
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-i", path,
-                    "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-                    "-f", "null", "-",
-                ],
-                capture_output=True, check=True,
-            )
-            log.info(f"  {label}: уровень проанализирован (-16 LUFS)")
-        except subprocess.CalledProcessError:
-            log.warning(f"  {label}: не удалось проанализировать уровень")
+    # Физическое выравнивание V2 на таймлайне
+    try:
+        from core.resolve_api import (
+            get_current_timeline, get_current_project, get_media_pool, get_fps,
+        )
+
+        timeline = get_current_timeline()
+        project = get_current_project()
+        mp = get_media_pool()
+
+        if timeline and offset_ms != 0:
+            tl_name = timeline.GetName()
+            fps = get_fps()
+            offset_frames = ms_to_frames(abs(offset_ms), fps)
+
+            log.info("Пересоздание таймлайна с выровненным скринкастом...")
+
+            # Удаляем старый таймлайн и создаём новый с правильным выравниванием
+            try:
+                mp.DeleteTimelines([timeline])
+
+                new_tl = mp.CreateTimelineFromClips(tl_name, [main_clip])
+                if new_tl:
+                    project.SetCurrentTimeline(new_tl)
+                    start_frame = new_tl.GetStartFrame()
+
+                    if new_tl.GetTrackCount("video") < 2:
+                        new_tl.AddTrack("video")
+
+                    clip_info = {
+                        "mediaPoolItem": screencast_clip,
+                        "trackIndex": 2,
+                    }
+
+                    if offset_ms > 0:
+                        # Скринкаст начал запись раньше → обрезаем начало скринкаста
+                        clip_info["recordFrame"] = start_frame
+                        clip_info["startFrame"] = offset_frames
+                    else:
+                        # Основное видео начало раньше → размещаем скринкаст позже
+                        clip_info["recordFrame"] = start_frame + offset_frames
+
+                    sc_ok = mp.AppendToTimeline([clip_info])
+                    if sc_ok:
+                        log.info(f"Скринкаст выровнен на V2 (смещение: {offset_ms} мс, {offset_frames} кадров)")
+                    else:
+                        log.warning("Не удалось добавить выровненный скринкаст на V2")
+                else:
+                    log.warning("Не удалось пересоздать таймлайн")
+            except Exception as e:
+                log.warning(f"DeleteTimelines не поддерживается — смещение будет применено при мультикамере: {e}")
+
+        elif timeline and offset_ms == 0:
+            log.info("Клипы уже синхронизированы — таймлайн не изменён")
+
+        # Отключаем аудио V2
+        tl = get_current_timeline()
+        if tl and tl.GetTrackCount("audio") >= 2:
+            tl.SetTrackEnable("audio", 2, False)
+            log.info("Аудио V2 отключено после синхронизации")
+    except ImportError:
+        pass
 
     # Сохраняем смещение
     if config:
@@ -140,17 +190,7 @@ def auto_sync_audio(clips_dict, config=None):
         output_path = os.path.join(working_dir, "audio_sync.json")
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(sync_data, f, indent=2)
-        log.info(f"Данные синхронизации сохранены в audio_sync.json")
+        log.info("Данные синхронизации сохранены в audio_sync.json")
 
-    # После синхронизации отключаем аудио V2 (используется аудио основного видео)
-    try:
-        from core.resolve_api import get_current_timeline
-        timeline = get_current_timeline()
-        if timeline and timeline.GetTrackCount("audio") >= 2:
-            timeline.SetTrackEnable("audio", 2, False)
-            log.info("Аудио V2 отключено после синхронизации")
-    except Exception:
-        pass
-
-    log.info(f"Шаг 2 завершён: смещение {offset_ms} мс будет применено при мультикамере")
+    log.info(f"Шаг 2 завершён: смещение {offset_ms} мс")
     return offset_ms

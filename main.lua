@@ -200,6 +200,8 @@ local function mkdir_p(path)
     end
 end
 
+local IS_WINDOWS = package.config:sub(1,1) == "\\"
+
 local function shell_exec(cmd)
     -- На macOS: DaVinci Resolve не наследует PATH из .zshrc/.bashrc,
     -- поэтому ffmpeg/curl могут быть не найдены. Добавляем стандартные пути.
@@ -213,7 +215,40 @@ local function shell_exec(cmd)
     return result or "", (code or (ok and 0 or 1))
 end
 
-local IS_WINDOWS = package.config:sub(1,1) == "\\"
+--- Поиск ffmpeg: проверяет стандартные пути, кеширует результат.
+local _ffmpeg_path = nil
+local function find_ffmpeg()
+    if _ffmpeg_path then return _ffmpeg_path end
+    local log = get_logger()
+    log:info("Поиск ffmpeg...")
+    local candidates
+    if IS_WINDOWS then
+        candidates = {"ffmpeg", "C:\\ffmpeg\\bin\\ffmpeg"}
+    else
+        candidates = {
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+            "ffmpeg",
+        }
+    end
+    for _, path in ipairs(candidates) do
+        local handle = io.popen('"' .. path .. '" -version 2>&1')
+        if handle then
+            local out = handle:read("*a") or ""
+            handle:close()
+            if out:match("ffmpeg version") then
+                _ffmpeg_path = path
+                log:info("  Найден ffmpeg: " .. path)
+                return _ffmpeg_path
+            end
+        end
+    end
+    log:warning("  ffmpeg не найден ни по одному из стандартных путей!")
+    log:warning("  Установите ffmpeg: brew install ffmpeg (macOS) или https://ffmpeg.org")
+    _ffmpeg_path = "ffmpeg"
+    return _ffmpeg_path
+end
 
 --------------------------------------------------------------------------------
 -- Таймкоды
@@ -719,7 +754,6 @@ local function import_media(main_video_path, screencast_path)
                     {
                         mediaPoolItem = result.screencast,
                         trackIndex = 2,
-                        mediaType = 1,
                         recordFrame = start_frame,
                     },
                 })
@@ -771,9 +805,10 @@ local function detect_first_sound(file_path, threshold_db)
         log:warning("  Файл не найден: " .. tostring(file_path))
         return 0.0
     end
+    local ffmpeg = find_ffmpeg()
     local cmd = string.format(
-        'ffmpeg -i "%s" -af "silencedetect=n=%ddB:d=0.1" -t 120 -f null -',
-        file_path, threshold_db)
+        '"%s" -i "%s" -af "silencedetect=n=%ddB:d=0.1" -t 120 -f null -',
+        ffmpeg, file_path, threshold_db)
     local output, code = shell_exec(cmd)
     if code ~= 0 and (not output or output == "") then
         log:warning("  ffmpeg не удалось выполнить (код " .. tostring(code) .. ")")
@@ -784,7 +819,9 @@ local function detect_first_sound(file_path, threshold_db)
     if first then return tonumber(first) end
     -- Если silence_end не найден — проверяем, был ли вообще анализ
     if not output:match("silencedetect") then
-        log:warning("  ffmpeg: silencedetect не запустился — возможно файл повреждён")
+        log:warning("  ffmpeg: silencedetect не запустился")
+        log:warning("  Проверьте: установлен ли ffmpeg? (brew install ffmpeg)")
+        log:info("  Вывод: " .. (output:sub(1, 200) or "(пусто)"))
     end
     return 0.0 -- если тишины нет — звук с самого начала
 end
@@ -833,30 +870,70 @@ local function auto_sync_audio(clips_dict, config)
         offset_ms = 0
     end
 
-    -- Нормализация громкости обоих клипов (выравнивание уровней)
-    log:info("Нормализация уровней звука...")
-    local tmp_main = os.tmpname() .. ".wav"
-    local tmp_sc = os.tmpname() .. ".wav"
+    -- Физическое выравнивание V2 на таймлайне (как Automatically Align Clips → Waveform)
+    local mp = get_media_pool()
+    local project = get_current_project()
+    local timeline = get_current_timeline()
 
-    shell_exec(string.format(
-        'ffmpeg -y -i "%s" -af "loudnorm=I=-16:TP=-1.5:LRA=11" -ar 48000 -ac 2 "%s"',
-        main_path, tmp_main))
-    shell_exec(string.format(
-        'ffmpeg -y -i "%s" -af "loudnorm=I=-16:TP=-1.5:LRA=11" -ar 48000 -ac 2 "%s"',
-        sc_path, tmp_sc))
+    if timeline and offset_ms ~= 0 then
+        local tl_name = timeline:GetName()
+        local fps = get_fps()
+        local offset_frames = ms_to_frames(math.abs(offset_ms), fps)
 
-    -- Проверяем, получилось ли нормализовать
-    if file_exists(tmp_main) then
-        log:info("  Основное видео: уровень нормализован до -16 LUFS")
+        log:info("Пересоздание таймлайна с выровненным скринкастом...")
+
+        -- Удаляем старый таймлайн и создаём новый с правильным выравниванием
+        local del_ok = pcall(function() mp:DeleteTimelines({timeline}) end)
+
+        if del_ok then
+            local new_tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
+            if new_tl then
+                project:SetCurrentTimeline(new_tl)
+                local start_frame = new_tl:GetStartFrame()
+
+                if new_tl:GetTrackCount("video") < 2 then
+                    new_tl:AddTrack("video")
+                end
+
+                local clip_info = {
+                    mediaPoolItem = screencast_clip,
+                    trackIndex = 2,
+                }
+
+                if offset_ms > 0 then
+                    -- Скринкаст начал запись раньше → обрезаем начало скринкаста
+                    clip_info.recordFrame = start_frame
+                    clip_info.startFrame = offset_frames
+                else
+                    -- Основное видео начало раньше → размещаем скринкаст позже
+                    clip_info.recordFrame = start_frame + offset_frames
+                end
+
+                local sc_ok = mp:AppendToTimeline({clip_info})
+                if sc_ok then
+                    log:info(string.format("Скринкаст выровнен на V2 (смещение: %d мс, %d кадров)",
+                        offset_ms, offset_frames))
+                else
+                    log:warning("Не удалось добавить выровненный скринкаст на V2")
+                end
+            else
+                log:warning("Не удалось пересоздать таймлайн")
+            end
+        else
+            log:warning("DeleteTimelines не поддерживается — смещение будет применено при мультикамере")
+        end
+    elseif timeline and offset_ms == 0 then
+        log:info("Клипы уже синхронизированы — таймлайн не изменён")
     end
-    if file_exists(tmp_sc) then
-        log:info("  Скринкаст: уровень нормализован до -16 LUFS")
+
+    -- Отключаем аудио V2 (используется аудио основного видео)
+    local tl = get_current_timeline()
+    if tl and tl:GetTrackCount("audio") >= 2 then
+        tl:SetTrackEnable("audio", 2, false)
+        log:info("Аудио V2 отключено после синхронизации")
     end
 
-    os.remove(tmp_main)
-    os.remove(tmp_sc)
-
-    -- Сохраняем смещение в конфиг для шага 7 (мультикамера)
+    -- Сохраняем смещение в конфиг для мультикамеры
     if config then
         config:set("audio_offset_ms", offset_ms)
         config:save()
@@ -875,14 +952,7 @@ local function auto_sync_audio(clips_dict, config)
         log:info("Данные синхронизации сохранены в audio_sync.json")
     end
 
-    -- После синхронизации отключаем аудио V2 (используется аудио основного видео)
-    local timeline = get_current_timeline()
-    if timeline and timeline:GetTrackCount("audio") >= 2 then
-        timeline:SetTrackEnable("audio", 2, false)
-        log:info("Аудио V2 отключено после синхронизации")
-    end
-
-    log:info(string.format("Шаг 2 завершён: смещение %d мс будет применено при мультикамере", offset_ms))
+    log:info(string.format("Шаг 2 завершён: смещение %d мс", offset_ms))
     return offset_ms
 end
 
@@ -898,7 +968,7 @@ local function auto_detect_threshold(video_path)
         return -40
     end
 
-    local cmd = string.format('ffmpeg -i "%s" -af "volumedetect" -f null -', video_path)
+    local cmd = string.format('"%s" -i "%s" -af "volumedetect" -f null -', find_ffmpeg(), video_path)
     local output = shell_exec(cmd)
 
     local mean_vol = output:match("mean_volume:%s*([-%.%d]+)%s*dB")
@@ -929,8 +999,8 @@ local function detect_silence(video_path, threshold_db, min_duration_ms, working
 
     local min_dur_sec = min_duration_ms / 1000.0
     local cmd = string.format(
-        'ffmpeg -i "%s" -af "silencedetect=n=%ddB:d=%.3f" -f null -',
-        video_path, threshold_db, min_dur_sec
+        '"%s" -i "%s" -af "silencedetect=n=%ddB:d=%.3f" -f null -',
+        find_ffmpeg(), video_path, threshold_db, min_dur_sec
     )
 
     log:info("Извлечение и анализ аудио через ffmpeg...")
@@ -1687,15 +1757,16 @@ local function generate_title_card(text, output_path, background_path, style_nam
         style.borderw, style.bordercolor
     )
 
+    local ffmpeg = find_ffmpeg()
     local cmd
     if background_path and background_path ~= "" and file_exists(background_path) then
         cmd = string.format(
-            'ffmpeg -y -i "%s" -t %d -vf "scale=%d:%d,%s" -c:v libx264 -preset fast -an "%s"',
-            background_path, dur, w, h, drawtext, output_path)
+            '"%s" -y -i "%s" -t %d -vf "scale=%d:%d,%s" -c:v libx264 -preset fast -an "%s"',
+            ffmpeg, background_path, dur, w, h, drawtext, output_path)
     else
         cmd = string.format(
-            'ffmpeg -y -f lavfi -i "color=c=%s:s=%dx%d:d=%d:r=25" -vf "%s" -c:v libx264 -preset fast -an "%s"',
-            style.bg_color, w, h, dur, drawtext, output_path)
+            '"%s" -y -f lavfi -i "color=c=%s:s=%dx%d:d=%d:r=25" -vf "%s" -c:v libx264 -preset fast -an "%s"',
+            ffmpeg, style.bg_color, w, h, dur, drawtext, output_path)
     end
 
     local result, code = shell_exec(cmd)

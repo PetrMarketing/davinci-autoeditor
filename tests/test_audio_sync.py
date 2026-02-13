@@ -25,6 +25,26 @@ class FakeClip:
         return ""
 
 
+def _mock_timeline():
+    """Создаёт мок таймлайна с правильными возвратами."""
+    tl = MagicMock()
+    tl.GetName.return_value = "AutoEditor_Timeline"
+    tl.GetStartFrame.return_value = 0
+    tl.GetTrackCount.return_value = 2
+    return tl
+
+
+def _resolve_patches():
+    """Возвращает список патчей для Resolve API."""
+    tl = _mock_timeline()
+    return {
+        "get_current_timeline": patch("core.resolve_api.get_current_timeline", return_value=tl),
+        "get_current_project": patch("core.resolve_api.get_current_project", return_value=MagicMock()),
+        "get_media_pool": patch("core.resolve_api.get_media_pool", return_value=MagicMock()),
+        "get_fps": patch("core.resolve_api.get_fps", return_value=25.0),
+    }
+
+
 class TestDetectFirstSound(unittest.TestCase):
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync.subprocess.run")
@@ -76,8 +96,14 @@ class TestAutoSyncAudio(unittest.TestCase):
         self._tmpdir = tempfile.mkdtemp()
         self._tmp_file = os.path.join(self._tmpdir, "test_config.json")
         config_module.CONFIG_FILE = self._tmp_file
+        # Start Resolve API patches
+        self._patches = _resolve_patches()
+        self._mocks = {k: p.start() for k, p in self._patches.items()}
 
     def tearDown(self):
+        # Stop patches
+        for p in self._patches.values():
+            p.stop()
         config_module.CONFIG_FILE = self._orig_file
         for f in os.listdir(self._tmpdir):
             os.unlink(os.path.join(self._tmpdir, f))
@@ -98,13 +124,10 @@ class TestAutoSyncAudio(unittest.TestCase):
         })
         self.assertEqual(result, 0)
 
-    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
-    @patch("core.audio_sync.subprocess.run")
-    def test_calculates_offset(self, mock_run, mock_detect, _, __):
+    def test_calculates_offset(self, mock_detect, _):
         mock_detect.side_effect = [1.0, 3.5]
-        mock_run.return_value = MagicMock()
 
         result = auto_sync_audio({
             "main": FakeClip("main", "/tmp/main.mp4"),
@@ -112,13 +135,10 @@ class TestAutoSyncAudio(unittest.TestCase):
         })
         self.assertEqual(result, 2500)
 
-    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
-    @patch("core.audio_sync.subprocess.run")
-    def test_small_offset_zeroed(self, mock_run, mock_detect, _, __):
+    def test_small_offset_zeroed(self, mock_detect, _):
         mock_detect.side_effect = [1.000, 1.030]
-        mock_run.return_value = MagicMock()
 
         result = auto_sync_audio({
             "main": FakeClip("main", "/tmp/main.mp4"),
@@ -126,13 +146,10 @@ class TestAutoSyncAudio(unittest.TestCase):
         })
         self.assertEqual(result, 0)
 
-    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
-    @patch("core.audio_sync.subprocess.run")
-    def test_saves_to_config(self, mock_run, mock_detect, _, __):
+    def test_saves_to_config(self, mock_detect, _):
         mock_detect.side_effect = [0.5, 2.5]
-        mock_run.return_value = MagicMock()
 
         cfg = config_module.Config()
         cfg.set("working_dir", "")
@@ -144,13 +161,10 @@ class TestAutoSyncAudio(unittest.TestCase):
 
         self.assertEqual(cfg.get("audio_offset_ms"), 2000)
 
-    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
-    @patch("core.audio_sync.subprocess.run")
-    def test_saves_json_to_working_dir(self, mock_run, mock_detect, _, __):
+    def test_saves_json_to_working_dir(self, mock_detect, _):
         mock_detect.side_effect = [1.0, 3.0]
-        mock_run.return_value = MagicMock()
 
         cfg = config_module.Config()
         cfg.set("working_dir", self._tmpdir)
@@ -170,13 +184,10 @@ class TestAutoSyncAudio(unittest.TestCase):
         self.assertAlmostEqual(data["main_onset_sec"], 1.0)
         self.assertAlmostEqual(data["screencast_onset_sec"], 3.0)
 
-    @patch("core.resolve_api.get_current_project")
     @patch("core.audio_sync.os.path.isfile", return_value=True)
     @patch("core.audio_sync._detect_first_sound")
-    @patch("core.audio_sync.subprocess.run")
-    def test_negative_offset(self, mock_run, mock_detect, _, __):
+    def test_negative_offset(self, mock_detect, _):
         mock_detect.side_effect = [5.0, 2.0]
-        mock_run.return_value = MagicMock()
 
         result = auto_sync_audio({
             "main": FakeClip("main", "/tmp/main.mp4"),

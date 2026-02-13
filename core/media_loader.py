@@ -85,7 +85,6 @@ def import_media(main_video_path, screencast_path=""):
                 sc_ok = mp.AppendToTimeline([{
                     "mediaPoolItem": result["screencast"],
                     "trackIndex": 2,
-                    "mediaType": 1,
                     "recordFrame": start_frame,
                 }])
                 if sc_ok:
