@@ -688,54 +688,45 @@ local function import_media(main_video_path, screencast_path)
         project:SetCurrentTimeline(existing_tl)
         log:info("Таймлайн уже существует: " .. tl_name .. " (используется существующий)")
     else
-        -- Создаём таймлайн с обоими клипами друг над другом (V1 + V2)
-        local clip_infos = {
-            { mediaPoolItem = main_clip, trackIndex = 1, mediaType = 1 },
-        }
-        if result.screencast then
-            clip_infos[#clip_infos + 1] = {
-                mediaPoolItem = result.screencast, trackIndex = 2, mediaType = 1,
-            }
-        end
-
-        local tl = mp:CreateTimelineFromClips(tl_name, clip_infos)
-        if tl then
-            project:SetCurrentTimeline(tl)
-            if result.screencast then
-                log:info("Таймлайн создан: " .. tl_name .. " (V1=камера, V2=скринкаст, друг над другом)")
-            else
-                log:info("Таймлайн создан: " .. tl_name .. " (основной клип на V1)")
-            end
-        else
-            -- Альтернативный способ: пустой таймлайн + добавление по одному
+        -- Создаём таймлайн с основным клипом на V1
+        local tl = mp:CreateTimelineFromClips(tl_name, {main_clip})
+        if not tl then
             log:info("Пробуем альтернативный способ создания таймлайна...")
             tl = mp:CreateEmptyTimeline(tl_name)
             if tl then
                 project:SetCurrentTimeline(tl)
-                local appended = mp:AppendToTimeline({main_clip})
-                if appended then
-                    log:info("Основной клип добавлен на V1")
-                end
-                if result.screencast then
-                    if tl:GetTrackCount("video") < 2 then
-                        tl:AddTrack("video")
-                    end
-                    local sc_ok = mp:AppendToTimeline({
-                        { mediaPoolItem = result.screencast, trackIndex = 2, mediaType = 1 },
-                    })
-                    if sc_ok then
-                        log:info("Скринкаст добавлен на V2")
-                    else
-                        log:warning("Не удалось добавить скринкаст на V2")
-                    end
-                end
-            else
-                log:warning("Не удалось создать таймлайн автоматически")
+                mp:AppendToTimeline({main_clip})
             end
         end
-        -- Аудио V2 НЕ отключаем — оно нужно для синхронизации (шаг 2)
-        if result.screencast then
-            log:info("Аудио V2 оставлено включённым для синхронизации (шаг 2)")
+
+        if tl then
+            project:SetCurrentTimeline(tl)
+            log:info("Таймлайн создан: " .. tl_name .. " (основной клип на V1)")
+
+            -- Добавляем скринкаст на V2 с recordFrame=0 (с начала таймлайна)
+            if result.screencast then
+                if tl:GetTrackCount("video") < 2 then
+                    tl:AddTrack("video")
+                end
+                local start_frame = tl:GetStartFrame()
+                local sc_ok = mp:AppendToTimeline({
+                    {
+                        mediaPoolItem = result.screencast,
+                        trackIndex = 2,
+                        mediaType = 1,
+                        recordFrame = start_frame,
+                    },
+                })
+                if sc_ok then
+                    log:info("Скринкаст размещён на V2 (с начала таймлайна)")
+                else
+                    log:warning("Не удалось добавить скринкаст на V2")
+                end
+                -- Аудио V2 НЕ отключаем — оно нужно для синхронизации (шаг 2)
+                log:info("Аудио V2 оставлено включённым для синхронизации (шаг 2)")
+            end
+        else
+            log:warning("Не удалось создать таймлайн автоматически")
         end
     end
 

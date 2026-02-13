@@ -64,40 +64,36 @@ def import_media(main_video_path, screencast_path=""):
         get_current_project().SetCurrentTimeline(existing_tl)
         log.info(f"Таймлайн уже существует: {tl_name} (используется существующий)")
     else:
-        # Создаём таймлайн с обоими клипами друг над другом (V1 + V2)
-        clip_infos = [
-            {"mediaPoolItem": main_clip, "trackIndex": 1, "mediaType": 1},
-        ]
-        if "screencast" in result:
-            clip_infos.append(
-                {"mediaPoolItem": result["screencast"], "trackIndex": 2, "mediaType": 1}
-            )
-
-        tl = mp.CreateTimelineFromClips(tl_name, clip_infos)
-        if tl:
-            get_current_project().SetCurrentTimeline(tl)
-            if "screencast" in result:
-                log.info(f"Таймлайн создан: {tl_name} (V1=камера, V2=скринкаст, друг над другом)")
-            else:
-                log.info(f"Таймлайн создан: {tl_name} (основной клип на V1)")
-        else:
+        # Создаём таймлайн с основным клипом на V1 (plain MediaPoolItem, без dict)
+        tl = mp.CreateTimelineFromClips(tl_name, [main_clip])
+        if not tl:
             log.info("Пробуем альтернативный способ создания таймлайна...")
             tl = create_timeline(tl_name)
             if tl:
+                get_current_project().SetCurrentTimeline(tl)
                 mp.AppendToTimeline([main_clip])
-                log.info("Основной клип добавлен на V1")
-                if "screencast" in result:
-                    if tl.GetTrackCount("video") < 2:
-                        tl.AddTrack("video")
-                    sc_ok = mp.AppendToTimeline([
-                        {"mediaPoolItem": result["screencast"], "trackIndex": 2, "mediaType": 1}
-                    ])
-                    if sc_ok:
-                        log.info("Скринкаст добавлен на V2")
-                    else:
-                        log.warning("Не удалось добавить скринкаст на V2")
-            else:
-                log.warning("Не удалось создать таймлайн автоматически")
+
+        if tl:
+            get_current_project().SetCurrentTimeline(tl)
+            log.info(f"Таймлайн создан: {tl_name} (основной клип на V1)")
+
+            # Добавляем скринкаст на V2 с recordFrame (с начала таймлайна)
+            if "screencast" in result:
+                if tl.GetTrackCount("video") < 2:
+                    tl.AddTrack("video")
+                start_frame = tl.GetStartFrame()
+                sc_ok = mp.AppendToTimeline([{
+                    "mediaPoolItem": result["screencast"],
+                    "trackIndex": 2,
+                    "mediaType": 1,
+                    "recordFrame": start_frame,
+                }])
+                if sc_ok:
+                    log.info("Скринкаст размещён на V2 (с начала таймлайна)")
+                else:
+                    log.warning("Не удалось добавить скринкаст на V2")
+        else:
+            log.warning("Не удалось создать таймлайн автоматически")
 
         # Аудио V2 НЕ отключаем — оно нужно для синхронизации (шаг 2)
         if "screencast" in result:
