@@ -19,7 +19,7 @@ DEFAULTS = {
     "title_style": "default",
 
     # OpenRouter AI
-    "openrouter_api_key": "",
+    "openrouter_api_key": "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",
     "openrouter_model": "google/gemini-2.0-flash-001",
     "ai_chunk_size": 50,  # блоков субтитров за один запрос
 
