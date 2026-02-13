@@ -453,10 +453,18 @@
             color: #fff;
         }
 
-        .install-panel {
+        .version-panel {
             display: none;
             max-width: 700px;
             margin: 0 auto;
+        }
+
+        .version-panel.active {
+            display: block;
+        }
+
+        .install-panel {
+            display: none;
         }
 
         .install-panel.active {
@@ -681,6 +689,7 @@
         <p class="hero-sub">
             10 шагов от сырого материала до готового видео — импорт, синхронизация звука,
             удаление тишины, субтитры, нарезка, мультикамера, переходы и титры. Всё автоматически.
+            Доступен в двух вариантах: Python и Lua.
         </p>
         <div class="hero-actions">
             <a href="https://github.com/PetrMarketing/davinci-autoeditor/archive/refs/heads/master.zip" class="btn-primary">
@@ -809,7 +818,7 @@
             <div class="req-card">
                 <i class="fa-brands fa-python"></i>
                 <h3>Python 3.10+</h3>
-                <p>Для запуска скриптов автоматизации и AI-модулей</p>
+                <p>Для Python-версии. Lua-версия работает без Python</p>
             </div>
             <div class="req-card">
                 <i class="fa-solid fa-terminal"></i>
@@ -830,25 +839,93 @@
     <div class="container">
         <div class="section-header">
             <h2>Установка</h2>
-            <p>Выберите вашу операционную систему и следуйте инструкциям</p>
+            <p>Два варианта: Lua (без Python) или Python. Выберите ОС и версию.</p>
         </div>
-        <div class="install-tabs">
-            <button class="install-tab active" data-tab="mac">
-                <i class="fa-brands fa-apple"></i> macOS
+
+        <div class="install-tabs" id="versionTabs">
+            <button class="install-tab active" data-vtab="lua">
+                <i class="fa-solid fa-moon"></i> Lua (рекомендуется)
             </button>
-            <button class="install-tab" data-tab="win">
-                <i class="fa-brands fa-windows"></i> Windows
-            </button>
-            <button class="install-tab" data-tab="linux">
-                <i class="fa-brands fa-linux"></i> Linux
+            <button class="install-tab" data-vtab="python">
+                <i class="fa-brands fa-python"></i> Python
             </button>
         </div>
 
-        <!-- macOS -->
-        <div class="install-panel active" id="panel-mac">
-            <div class="code-block">
-                <button class="copy-btn" data-copy="mac"><i class="fa-regular fa-copy"></i> Скопировать</button>
-                <code><span class="comment"># 1. Установите Python и ffmpeg через Homebrew</span>
+        <!-- ═══ LUA ═══ -->
+        <div class="version-panel active" id="vpanel-lua">
+            <div class="install-tabs">
+                <button class="install-tab active" data-tab="lua-mac">
+                    <i class="fa-brands fa-apple"></i> macOS
+                </button>
+                <button class="install-tab" data-tab="lua-win">
+                    <i class="fa-brands fa-windows"></i> Windows
+                </button>
+                <button class="install-tab" data-tab="lua-linux">
+                    <i class="fa-brands fa-linux"></i> Linux
+                </button>
+            </div>
+
+            <div class="install-panel active" id="panel-lua-mac">
+                <div class="code-block">
+                    <button class="copy-btn"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                    <code><span class="comment"># 1. Установите ffmpeg и curl</span>
+brew install ffmpeg curl
+
+<span class="comment"># 2. Распакуйте архив в папку скриптов Resolve</span>
+SCRIPTS=~/Library/Application\ Support/Blackmagic\ Design/DaVinci\ Resolve/Fusion/Scripts/Utility
+unzip davinci-autoeditor-master.zip -d "$SCRIPTS"
+mv "$SCRIPTS/davinci-autoeditor-master" "$SCRIPTS/AutoEditor"</code>
+                </div>
+                <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code> (Lua). Python не нужен.</p>
+            </div>
+
+            <div class="install-panel" id="panel-lua-win">
+                <div class="code-block">
+                    <button class="copy-btn"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                    <code><span class="comment"># 1. Установите ffmpeg и curl</span>
+winget install ffmpeg
+<span class="comment"># curl встроен в Windows 10+</span>
+
+<span class="comment"># 2. Распакуйте архив в папку скриптов Resolve</span>
+<span class="comment">#    %APPDATA%\Blackmagic Design\DaVinci Resolve\Fusion\Scripts\Utility\</span>
+<span class="comment">#    Переименуйте папку davinci-autoeditor-master → AutoEditor</span></code>
+                </div>
+                <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code> (Lua). Python не нужен.</p>
+            </div>
+
+            <div class="install-panel" id="panel-lua-linux">
+                <div class="code-block">
+                    <button class="copy-btn"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                    <code><span class="comment"># 1. Установите ffmpeg и curl</span>
+sudo apt update && sudo apt install ffmpeg curl
+
+<span class="comment"># 2. Распакуйте архив в папку скриптов Resolve</span>
+SCRIPTS=~/.local/share/DaVinci\ Resolve/Fusion/Scripts/Utility
+unzip davinci-autoeditor-master.zip -d "$SCRIPTS"
+mv "$SCRIPTS/davinci-autoeditor-master" "$SCRIPTS/AutoEditor"</code>
+                </div>
+                <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code> (Lua). Python не нужен.</p>
+            </div>
+        </div>
+
+        <!-- ═══ PYTHON ═══ -->
+        <div class="version-panel" id="vpanel-python">
+            <div class="install-tabs">
+                <button class="install-tab active" data-tab="py-mac">
+                    <i class="fa-brands fa-apple"></i> macOS
+                </button>
+                <button class="install-tab" data-tab="py-win">
+                    <i class="fa-brands fa-windows"></i> Windows
+                </button>
+                <button class="install-tab" data-tab="py-linux">
+                    <i class="fa-brands fa-linux"></i> Linux
+                </button>
+            </div>
+
+            <div class="install-panel active" id="panel-py-mac">
+                <div class="code-block">
+                    <button class="copy-btn"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                    <code><span class="comment"># 1. Установите Python и ffmpeg через Homebrew</span>
 brew install python@3.10 ffmpeg
 
 <span class="comment"># 2. Распакуйте архив в папку скриптов Resolve</span>
@@ -858,15 +935,14 @@ mv "$SCRIPTS/davinci-autoeditor-master" "$SCRIPTS/AutoEditor"
 
 <span class="comment"># 3. Установите зависимости Python</span>
 pip3 install pydub httpx</code>
+                </div>
+                <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code> (Python). API-ключ укажите в настройках плагина.</p>
             </div>
-            <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code>. API-ключ OpenRouter укажите в настройках плагина.</p>
-        </div>
 
-        <!-- Windows -->
-        <div class="install-panel" id="panel-win">
-            <div class="code-block">
-                <button class="copy-btn" data-copy="win"><i class="fa-regular fa-copy"></i> Скопировать</button>
-                <code><span class="comment"># 1. Установите Python 3.10+ с python.org</span>
+            <div class="install-panel" id="panel-py-win">
+                <div class="code-block">
+                    <button class="copy-btn"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                    <code><span class="comment"># 1. Установите Python 3.10+ с python.org</span>
 <span class="comment">#    Убедитесь, что отмечен "Add Python to PATH"</span>
 
 <span class="comment"># 2. Установите ffmpeg</span>
@@ -878,15 +954,14 @@ winget install ffmpeg
 
 <span class="comment"># 4. Установите зависимости Python</span>
 pip install pydub httpx</code>
+                </div>
+                <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code> (Python). API-ключ укажите в настройках плагина.</p>
             </div>
-            <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code>. API-ключ OpenRouter укажите в настройках плагина.</p>
-        </div>
 
-        <!-- Linux -->
-        <div class="install-panel" id="panel-linux">
-            <div class="code-block">
-                <button class="copy-btn" data-copy="linux"><i class="fa-regular fa-copy"></i> Скопировать</button>
-                <code><span class="comment"># 1. Установите Python и ffmpeg</span>
+            <div class="install-panel" id="panel-py-linux">
+                <div class="code-block">
+                    <button class="copy-btn"><i class="fa-regular fa-copy"></i> Скопировать</button>
+                    <code><span class="comment"># 1. Установите Python и ffmpeg</span>
 sudo apt update && sudo apt install python3 python3-pip ffmpeg
 
 <span class="comment"># 2. Распакуйте архив в папку скриптов Resolve</span>
@@ -896,8 +971,9 @@ mv "$SCRIPTS/davinci-autoeditor-master" "$SCRIPTS/AutoEditor"
 
 <span class="comment"># 3. Установите зависимости Python</span>
 pip3 install pydub httpx</code>
+                </div>
+                <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code> (Python). API-ключ укажите в настройках плагина.</p>
             </div>
-            <p class="install-note">Запуск: Workspace → Scripts → AutoEditor → <code>main</code>. API-ключ OpenRouter укажите в настройках плагина.</p>
         </div>
     </div>
 </section>
@@ -945,15 +1021,25 @@ pip3 install pydub httpx</code>
         });
     });
 
-    // ── Install OS tabs ──
-    const tabs = document.querySelectorAll('.install-tab');
-    const panels = document.querySelectorAll('.install-panel');
+    // ── Version tabs (Lua / Python) ──
+    document.querySelectorAll('[data-vtab]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const target = btn.dataset.vtab;
+            document.querySelectorAll('[data-vtab]').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.version-panel').forEach(p => p.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('vpanel-' + target).classList.add('active');
+        });
+    });
 
-    tabs.forEach(tab => {
+    // ── Install OS tabs (within each version panel) ──
+    document.querySelectorAll('[data-tab]').forEach(tab => {
         tab.addEventListener('click', () => {
             const target = tab.dataset.tab;
-            tabs.forEach(t => t.classList.remove('active'));
-            panels.forEach(p => p.classList.remove('active'));
+            const container = tab.closest('.version-panel');
+            if (!container) return;
+            container.querySelectorAll('[data-tab]').forEach(t => t.classList.remove('active'));
+            container.querySelectorAll('.install-panel').forEach(p => p.classList.remove('active'));
             tab.classList.add('active');
             document.getElementById('panel-' + target).classList.add('active');
         });
