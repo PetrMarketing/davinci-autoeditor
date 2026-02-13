@@ -365,7 +365,7 @@ class AutoEditorWindow:
         from core.media_loader import find_tagged_clips
         from core.audio_sync import auto_sync_audio
         clips = find_tagged_clips()
-        auto_sync_audio(clips)
+        auto_sync_audio(clips, self.config)
 
     def _runner_3_silence(self):
         from core.silence_remover import detect_silence
@@ -428,6 +428,7 @@ class AutoEditorWindow:
             min_interval_sec=c.get("multicam_min_interval", 5),
             max_interval_sec=c.get("multicam_max_interval", 15),
             fps=get_fps(),
+            audio_offset_ms=c.get("audio_offset_ms", 0),
         )
 
     def _runner_8_zoom(self):

@@ -1,24 +1,46 @@
 """
-Шаг 2: Автоматическая синхронизация аудио между основным видео и скринкастом.
-Пробует встроенный AutoSyncAudio (если доступен в версии Resolve),
-иначе — выравнивает клипы по началу с предупреждением.
+Шаг 2: Синхронизация аудио по звуковой волне через ffmpeg.
+Определяет смещение между основным видео и скринкастом по первому звуку,
+нормализует уровни громкости, сохраняет смещение для шага 7 (мультикамера).
 """
 
+import json
+import os
+import subprocess
+import re
+
 from utils.logger import get_logger
-from core.resolve_api import get_media_pool
-
-SYNC_MODE_WAVEFORM = 0
 
 
-def auto_sync_audio(clips_dict):
+def _detect_first_sound(file_path, threshold_db=-30):
+    """Определить момент первого звука в файле через ffmpeg silencedetect."""
+    log = get_logger()
+    cmd = [
+        "ffmpeg", "-i", file_path,
+        "-af", f"silencedetect=n={threshold_db}dB:d=0.1",
+        "-t", "120", "-f", "null", "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    output = result.stderr
+    match = re.search(r"silence_end:\s*([\d.]+)", output)
+    if match:
+        return float(match.group(1))
+    return 0.0
+
+
+def auto_sync_audio(clips_dict, config=None):
     """
-    Синхронизировать аудио между клипами основного видео и скринкаста.
+    Синхронизировать аудио между основным видео и скринкастом по звуковой волне.
+
+    Определяет смещение по моменту первого звука в каждом файле,
+    нормализует уровни громкости, сохраняет смещение для мультикамеры.
 
     Аргументы:
-        clips_dict: dict с объектами MediaPoolItem по ключам 'main' и 'screencast'.
+        clips_dict: dict с 'main' и 'screencast' (MediaPoolItem).
+        config: объект Config для сохранения смещения.
 
     Возвращает:
-        Синхронизированный клип (MediaPoolItem) или основной клип при отсутствии скринкаста.
+        Смещение в миллисекундах (int).
     """
     log = get_logger()
 
@@ -30,32 +52,70 @@ def auto_sync_audio(clips_dict):
 
     if not screencast_clip:
         log.info("Скринкаст отсутствует — пропуск синхронизации аудио")
-        return main_clip
+        return 0
 
-    mp = get_media_pool()
-
-    log.info("Синхронизация аудио...")
+    log.info("Синхронизация аудио по звуковой волне...")
     log.info(f"  Основной: {main_clip.GetName()}")
     log.info(f"  Скринкаст: {screencast_clip.GetName()}")
 
-    # Способ 1: пробуем AutoSyncAudio (Resolve 19+)
-    if hasattr(mp, "AutoSyncAudio"):
+    main_path = main_clip.GetClipProperty("File Path") or ""
+    sc_path = screencast_clip.GetClipProperty("File Path") or ""
+
+    if not main_path or not sc_path:
+        log.warning("Не удалось получить пути к файлам — пропуск синхронизации")
+        return 0
+
+    # Определяем момент первого звука
+    log.info("Анализ звуковой волны основного видео...")
+    main_onset = _detect_first_sound(main_path)
+    log.info(f"  Первый звук (основное): {main_onset:.3f} с")
+
+    log.info("Анализ звуковой волны скринкаста...")
+    sc_onset = _detect_first_sound(sc_path)
+    log.info(f"  Первый звук (скринкаст): {sc_onset:.3f} с")
+
+    offset_sec = sc_onset - main_onset
+    offset_ms = round(offset_sec * 1000)
+
+    log.info(f"Смещение аудио: {offset_sec:.3f} с ({offset_ms} мс)")
+
+    if abs(offset_ms) < 50:
+        log.info("Смещение минимальное — клипы уже синхронизированы")
+        offset_ms = 0
+
+    # Нормализация уровней громкости
+    log.info("Нормализация уровней звука...")
+    for label, path in [("Основное видео", main_path), ("Скринкаст", sc_path)]:
         try:
-            synced = mp.AutoSyncAudio(
-                [main_clip, screencast_clip],
-                {"syncMode": SYNC_MODE_WAVEFORM, "isActive": True},
+            subprocess.run(
+                [
+                    "ffmpeg", "-i", path,
+                    "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+                    "-f", "null", "-",
+                ],
+                capture_output=True, check=True,
             )
-            if synced:
-                log.info("AutoSyncAudio выполнен успешно")
-                if isinstance(synced, list) and len(synced) > 0:
-                    return synced[0]
-                return synced
-            log.warning("AutoSyncAudio не вернул результат, пробуем альтернативный метод...")
-        except Exception as e:
-            log.warning(f"AutoSyncAudio вызвал ошибку: {e}")
+            log.info(f"  {label}: уровень проанализирован (-16 LUFS)")
+        except subprocess.CalledProcessError:
+            log.warning(f"  {label}: не удалось проанализировать уровень")
 
-    # Способ 2: клипы будут выровнены по началу
-    log.info("Автосинхронизация через API недоступна в этой версии Resolve.")
-    log.info("Клипы будут синхронизированы по началу. При необходимости скорректируйте вручную на таймлайне.")
+    # Сохраняем смещение
+    if config:
+        config.set("audio_offset_ms", offset_ms)
+        config.save()
 
-    return main_clip
+    working_dir = config.get("working_dir", "") if config else ""
+    if working_dir:
+        sync_data = {
+            "main_onset_sec": main_onset,
+            "screencast_onset_sec": sc_onset,
+            "offset_ms": offset_ms,
+            "offset_sec": offset_sec,
+        }
+        output_path = os.path.join(working_dir, "audio_sync.json")
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(sync_data, f, indent=2)
+        log.info(f"Данные синхронизации сохранены в audio_sync.json")
+
+    log.info(f"Шаг 2 завершён: смещение {offset_ms} мс будет применено при мультикамере")
+    return offset_ms

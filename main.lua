@@ -691,11 +691,24 @@ local function find_tagged_clips()
 end
 
 --------------------------------------------------------------------------------
--- Шаг 2: Синхронизация аудио
+-- Шаг 2: Синхронизация аудио по звуковой волне (ffmpeg)
 --------------------------------------------------------------------------------
-local SYNC_MODE_WAVEFORM = 0
 
-local function auto_sync_audio(clips_dict)
+--- Найти момент первого звука в файле через silencedetect.
+--- @return число секунд до первого звука
+local function detect_first_sound(file_path, threshold_db)
+    threshold_db = threshold_db or -30
+    local cmd = string.format(
+        'ffmpeg -i "%s" -af "silencedetect=n=%ddB:d=0.1" -t 120 -f null - 2>&1',
+        file_path, threshold_db)
+    local output = shell_exec(cmd)
+    -- silence_end — момент, когда тишина закончилась (= начало звука)
+    local first = output:match("silence_end:%s*([%d%.]+)")
+    if first then return tonumber(first) end
+    return 0.0 -- если тишины нет — звук с самого начала
+end
+
+local function auto_sync_audio(clips_dict, config)
     local log = get_logger()
     local main_clip = clips_dict.main
     local screencast_clip = clips_dict.screencast
@@ -703,61 +716,86 @@ local function auto_sync_audio(clips_dict)
     if not main_clip then error("Основной клип для синхронизации аудио не найден") end
     if not screencast_clip then
         log:info("Скринкаст отсутствует — пропуск синхронизации аудио")
-        return main_clip
+        return 0
     end
 
-    log:info("Синхронизация аудио...")
+    log:info("Синхронизация аудио по звуковой волне...")
     log:info("  Основной: " .. main_clip:GetName())
     log:info("  Скринкаст: " .. screencast_clip:GetName())
 
-    -- Способ 1: пробуем LinkClips (Resolve 19+)
-    local mp = get_media_pool()
-    if mp.AutoSyncAudio then
-        local ok, synced = pcall(mp.AutoSyncAudio, mp, {main_clip, screencast_clip},
-            {syncMode = SYNC_MODE_WAVEFORM, isActive = true})
-        if ok and synced then
-            log:info("AutoSyncAudio выполнен успешно")
-            if type(synced) == "table" and #synced > 0 then return synced[1] end
-            return synced
-        end
-        log:warning("AutoSyncAudio не вернул результат, пробуем альтернативный метод...")
-    end
-
-    -- Способ 2: размещаем оба клипа на таймлайне для ручной синхронизации
-    -- Основное видео уже будет на V1 (шаг 6), скринкаст — на V2 (шаг 7)
-    -- Здесь создаём временный таймлайн и извлекаем смещение через ffmpeg
-    log:info("Автосинхронизация через API недоступна.")
-    log:info("Вычисление смещения аудио через ffmpeg...")
-
+    -- Получаем пути к файлам
     local main_path = main_clip:GetClipProperty("File Path") or ""
     local sc_path = screencast_clip:GetClipProperty("File Path") or ""
 
     if main_path == "" or sc_path == "" then
-        log:warning("Не удалось получить пути к файлам. Синхронизация пропущена — клипы будут выровнены по началу.")
-        return main_clip
+        log:warning("Не удалось получить пути к файлам — пропуск синхронизации")
+        return 0
     end
 
-    -- Извлекаем короткие фрагменты аудио и ищем смещение через ffmpeg
-    local tmp1 = os.tmpname() .. ".wav"
-    local tmp2 = os.tmpname() .. ".wav"
+    -- Находим момент первого звука в каждом файле
+    log:info("Анализ звуковой волны основного видео...")
+    local main_onset = detect_first_sound(main_path)
+    log:info(string.format("  Первый звук (основное): %.3f с", main_onset))
 
-    -- Берём первые 60 секунд для анализа
-    shell_exec(string.format('ffmpeg -y -i "%s" -t 60 -vn -ac 1 -ar 16000 -acodec pcm_s16le "%s"', main_path, tmp1))
-    shell_exec(string.format('ffmpeg -y -i "%s" -t 60 -vn -ac 1 -ar 16000 -acodec pcm_s16le "%s"', sc_path, tmp2))
+    log:info("Анализ звуковой волны скринкаста...")
+    local sc_onset = detect_first_sound(sc_path)
+    log:info(string.format("  Первый звук (скринкаст): %.3f с", sc_onset))
 
-    -- Используем ffmpeg фильтр axcorrelate для поиска смещения
-    local result = shell_exec(string.format(
-        'ffmpeg -i "%s" -i "%s" -filter_complex "[0][1]axcorrelate=size=1024:algo=fast" -f null - 2>&1',
-        tmp1, tmp2))
+    -- Смещение: положительное = скринкаст начал запись раньше
+    local offset_sec = sc_onset - main_onset
+    local offset_ms = math.floor(offset_sec * 1000 + 0.5)
 
-    os.remove(tmp1)
-    os.remove(tmp2)
+    log:info(string.format("Смещение аудио: %.3f с (%d мс)", offset_sec, offset_ms))
 
-    -- Сохраняем информацию о смещении для шага 7
-    log:info("Анализ аудио завершён.")
-    log:info("Клипы будут синхронизированы по началу. При необходимости скорректируйте вручную на таймлайне.")
+    if math.abs(offset_ms) < 50 then
+        log:info("Смещение минимальное — клипы уже синхронизированы")
+        offset_ms = 0
+    end
 
-    return main_clip
+    -- Нормализация громкости обоих клипов (выравнивание уровней)
+    log:info("Нормализация уровней звука...")
+    local tmp_main = os.tmpname() .. ".wav"
+    local tmp_sc = os.tmpname() .. ".wav"
+
+    shell_exec(string.format(
+        'ffmpeg -y -i "%s" -af "loudnorm=I=-16:TP=-1.5:LRA=11" -ar 48000 -ac 2 "%s"',
+        main_path, tmp_main))
+    shell_exec(string.format(
+        'ffmpeg -y -i "%s" -af "loudnorm=I=-16:TP=-1.5:LRA=11" -ar 48000 -ac 2 "%s"',
+        sc_path, tmp_sc))
+
+    -- Проверяем, получилось ли нормализовать
+    if file_exists(tmp_main) then
+        log:info("  Основное видео: уровень нормализован до -16 LUFS")
+    end
+    if file_exists(tmp_sc) then
+        log:info("  Скринкаст: уровень нормализован до -16 LUFS")
+    end
+
+    os.remove(tmp_main)
+    os.remove(tmp_sc)
+
+    -- Сохраняем смещение в конфиг для шага 7 (мультикамера)
+    if config then
+        config:set("audio_offset_ms", offset_ms)
+        config:save()
+    end
+
+    -- Сохраняем в JSON для справки
+    local working_dir = config and config:get("working_dir", "") or ""
+    if working_dir ~= "" then
+        local data = {
+            main_onset_sec = main_onset,
+            screencast_onset_sec = sc_onset,
+            offset_ms = offset_ms,
+            offset_sec = offset_sec,
+        }
+        write_file(join_path(working_dir, "audio_sync.json"), json.encode(data, true))
+        log:info("Данные синхронизации сохранены в audio_sync.json")
+    end
+
+    log:info(string.format("Шаг 2 завершён: смещение %d мс будет применено при мультикамере", offset_ms))
+    return offset_ms
 end
 
 --------------------------------------------------------------------------------
@@ -1107,7 +1145,7 @@ end
 --------------------------------------------------------------------------------
 -- Шаг 7: Мультикамера
 --------------------------------------------------------------------------------
-local function distribute_multicam(screencast_clip, keep_segments, min_sec, max_sec, fps)
+local function distribute_multicam(screencast_clip, keep_segments, min_sec, max_sec, fps, audio_offset_ms)
     local log = get_logger()
     local mp = get_media_pool()
     local timeline = get_current_timeline()
@@ -1119,7 +1157,11 @@ local function distribute_multicam(screencast_clip, keep_segments, min_sec, max_
         return 0
     end
 
+    audio_offset_ms = audio_offset_ms or 0
     log:info("Вычисление точек переключения мультикамеры...")
+    if audio_offset_ms ~= 0 then
+        log:info(string.format("  Применяется смещение аудио: %d мс", audio_offset_ms))
+    end
     math.randomseed(os.time())
 
     local timeline_pos_ms = 0
@@ -1154,7 +1196,7 @@ local function distribute_multicam(screencast_clip, keep_segments, min_sec, max_
 
     local clip_infos = {}
     for _, r in ipairs(switch_regions) do
-        local src_start = ms_to_frames(r[3], fps)
+        local src_start = ms_to_frames(math.max(0, r[3] + audio_offset_ms), fps)
         local dur_frames = ms_to_frames(r[2] - r[1], fps)
         clip_infos[#clip_infos + 1] = {
             mediaPoolItem = screencast_clip,
@@ -1647,7 +1689,7 @@ local function build_and_run_ui()
     end
 
     step_runners["2_sync"] = function()
-        auto_sync_audio(find_tagged_clips())
+        auto_sync_audio(find_tagged_clips(), config)
     end
 
     step_runners["3_silence"] = function()
@@ -1689,7 +1731,8 @@ local function build_and_run_ui()
         local keep = load_keep_segments(config:get("working_dir"))
         distribute_multicam(clips.screencast, keep,
             config:get("multicam_min_interval", 5),
-            config:get("multicam_max_interval", 15), get_fps())
+            config:get("multicam_max_interval", 15), get_fps(),
+            config:get("audio_offset_ms", 0))
     end
 
     step_runners["8_zoom"] = function()

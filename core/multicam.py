@@ -17,6 +17,7 @@ def distribute_multicam(
     min_interval_sec=5,
     max_interval_sec=15,
     fps=25.0,
+    audio_offset_ms=0,
 ):
     """
     Распределить сегменты скринкаста на дорожке V2 текущего таймлайна.
@@ -31,6 +32,7 @@ def distribute_multicam(
         min_interval_sec: Минимальный интервал между переключениями (в секундах).
         max_interval_sec: Максимальный интервал между переключениями (в секундах).
         fps: Частота кадров таймлайна.
+        audio_offset_ms: Смещение аудио скринкаста (в мс) из шага 2.
 
     Возвращает:
         Количество сегментов скринкаста, размещённых на V2.
@@ -45,6 +47,9 @@ def distribute_multicam(
     if not screencast_clip:
         log.info("Клип скринкаста отсутствует — пропускаем мультикамерное распределение")
         return 0
+
+    if audio_offset_ms:
+        log.info(f"Применяется смещение аудио: {audio_offset_ms} мс")
 
     log.info("Вычисление точек переключения мультикамеры...")
 
@@ -85,7 +90,7 @@ def distribute_multicam(
     # Формируем информацию о клипах для V2
     clip_infos = []
     for tl_start_ms, tl_end_ms, src_start_ms in switch_regions:
-        src_start_frame = ms_to_frames(src_start_ms, fps)
+        src_start_frame = ms_to_frames(max(0, src_start_ms + audio_offset_ms), fps)
         duration_frames = ms_to_frames(tl_end_ms - tl_start_ms, fps)
         src_end_frame = src_start_frame + duration_frames
 
