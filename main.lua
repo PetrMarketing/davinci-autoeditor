@@ -1182,34 +1182,120 @@ local function run_ai_cleanup(srt_path, output_path, api_key, model, chunk_size)
 end
 
 --------------------------------------------------------------------------------
--- Шаг 6: Нарезка фрагментов
+-- Шаг 4: Нарезка тишины (только по регионам тишины, без ИИ)
 --------------------------------------------------------------------------------
-local function compute_keep_segments(working_dir, total_duration_ms, fps)
+local function compute_silence_keep_segments(working_dir, total_duration_ms, fps)
     local log = get_logger()
     fps = fps or 25.0
 
     local silence_regions = load_silence_regions(working_dir)
     log:info("Загружено " .. #silence_regions .. " регионов тишины")
 
-    local cleaned_srt_path = join_path(working_dir, "cleaned.srt")
-    local ai_blocks = {}
-    if file_exists(cleaned_srt_path) then
-        ai_blocks = read_srt(cleaned_srt_path)
-        log:info("Загружено " .. #ai_blocks .. " блоков субтитров, обработанных ИИ")
-    else
-        log:warning("Файл cleaned.srt не найден — используются только регионы тишины")
-    end
-
-    local delete_regions = merge_silence_and_ai(silence_regions, ai_blocks)
-    log:info("Всего регионов удаления после объединения: " .. #delete_regions)
-
-    local keep_segments = invert_regions(delete_regions, total_duration_ms)
+    local keep_segments = invert_regions(silence_regions, total_duration_ms)
     log:info("Сегментов для сохранения: " .. #keep_segments)
 
     local kept_ms = 0
     for _, seg in ipairs(keep_segments) do kept_ms = kept_ms + (seg[2] - seg[1]) end
     local removed_ms = total_duration_ms - kept_ms
-    log:info(string.format("Сохраняется %.1fс, удаляется %.1fс (%.1f%% вырезано)",
+    log:info(string.format("Сохраняется %.1fс, удаляется %.1fс тишины (%.1f%% вырезано)",
+        kept_ms / 1000, removed_ms / 1000,
+        total_duration_ms > 0 and (removed_ms / total_duration_ms * 100) or 0))
+
+    local data = {
+        total_duration_ms = total_duration_ms,
+        kept_ms = kept_ms, removed_ms = removed_ms,
+        segments = keep_segments,
+    }
+    write_file(join_path(working_dir, "keep_segments_silence.json"), json.encode(data, true))
+    return keep_segments
+end
+
+--------------------------------------------------------------------------------
+-- Шаг 7: Нарезка мусора (ИИ-удаления на чистом таймлайне)
+--------------------------------------------------------------------------------
+
+--- Маппинг времени с чистого таймлайна на оригинальное видео.
+--- @param t_clean_ms число — позиция на чистом таймлайне (мс)
+--- @param keep_segments таблица — сегменты тишины (оригинальное время)
+--- @return число — позиция в оригинальном видео (мс)
+local function clean_to_original(t_clean_ms, keep_segments)
+    local elapsed = 0
+    for _, seg in ipairs(keep_segments) do
+        local seg_dur = seg[2] - seg[1]
+        if elapsed + seg_dur >= t_clean_ms then
+            return seg[1] + (t_clean_ms - elapsed)
+        end
+        elapsed = elapsed + seg_dur
+    end
+    -- За пределами — вернуть конец последнего сегмента
+    if #keep_segments > 0 then return keep_segments[#keep_segments][2] end
+    return t_clean_ms
+end
+
+local function compute_ai_keep_segments(working_dir, total_duration_ms, fps)
+    local log = get_logger()
+    fps = fps or 25.0
+
+    -- Загружаем keep-сегменты от нарезки тишины (шаг 4)
+    local silence_keep_path = join_path(working_dir, "keep_segments_silence.json")
+    local silence_keep = {}
+    if file_exists(silence_keep_path) then
+        local content = read_file(silence_keep_path)
+        local data = json.decode(content)
+        if data and data.segments then silence_keep = data.segments end
+    end
+    log:info("Загружено " .. #silence_keep .. " сегментов после нарезки тишины")
+
+    -- Загружаем ИИ-очищенные субтитры
+    local cleaned_srt_path = join_path(working_dir, "cleaned.srt")
+    if not file_exists(cleaned_srt_path) then
+        log:warning("Файл cleaned.srt не найден — используются сегменты тишины без изменений")
+        -- Копируем silence keep как финальные
+        local content = read_file(silence_keep_path)
+        if content then write_file(join_path(working_dir, "keep_segments.json"), content) end
+        return silence_keep
+    end
+
+    local ai_blocks = read_srt(cleaned_srt_path)
+    local deleted_count = 0
+    for _, b in ipairs(ai_blocks) do if b.deleted then deleted_count = deleted_count + 1 end end
+    log:info(string.format("ИИ пометил %d/%d блоков на удаление", deleted_count, #ai_blocks))
+
+    -- Маппим ИИ-удаления с чистого таймлайна на оригинальное время
+    local ai_delete_regions = {}
+    for _, b in ipairs(ai_blocks) do
+        if b.deleted then
+            local orig_start = clean_to_original(b.start_ms, silence_keep)
+            local orig_end = clean_to_original(b.end_ms, silence_keep)
+            ai_delete_regions[#ai_delete_regions + 1] = {orig_start, orig_end}
+        end
+    end
+    log:info("ИИ-удалений (в оригинальном времени): " .. #ai_delete_regions)
+
+    -- Объединяем тишину + ИИ-удаления
+    local silence_regions = load_silence_regions(working_dir)
+    local all_delete = {}
+    for _, r in ipairs(silence_regions) do all_delete[#all_delete + 1] = r end
+    for _, r in ipairs(ai_delete_regions) do all_delete[#all_delete + 1] = r end
+
+    -- Сортируем и объединяем пересечения
+    table.sort(all_delete, function(a, b) return a[1] < b[1] end)
+    local merged = {}
+    for _, r in ipairs(all_delete) do
+        if #merged == 0 or r[1] > merged[#merged][2] then
+            merged[#merged + 1] = {r[1], r[2]}
+        else
+            merged[#merged][2] = math.max(merged[#merged][2], r[2])
+        end
+    end
+
+    local keep_segments = invert_regions(merged, total_duration_ms)
+    log:info("Финальных сегментов для сохранения: " .. #keep_segments)
+
+    local kept_ms = 0
+    for _, seg in ipairs(keep_segments) do kept_ms = kept_ms + (seg[2] - seg[1]) end
+    local removed_ms = total_duration_ms - kept_ms
+    log:info(string.format("Итого: сохраняется %.1fс, удаляется %.1fс (%.1f%% вырезано)",
         kept_ms / 1000, removed_ms / 1000,
         total_duration_ms > 0 and (removed_ms / total_duration_ms * 100) or 0))
 
@@ -1683,13 +1769,14 @@ local STEPS = {
     {key = "1_import",      label = "1. Импорт медиа"},
     {key = "2_sync",        label = "2. Синхронизация аудио"},
     {key = "3_silence",     label = "3. Обнаружение тишины"},
-    {key = "4_subtitles",   label = "4. Генерация субтитров"},
-    {key = "5_ai_clean",    label = "5. Очистка ИИ"},
-    {key = "6_cut",         label = "6. Нарезка фрагментов"},
-    {key = "7_multicam",    label = "7. Мультикамера"},
-    {key = "8_zoom",        label = "8. Динамический зум"},
-    {key = "9_transitions", label = "9. Переходы"},
-    {key = "10_titles",     label = "10. Титульные карточки"},
+    {key = "4_cut_silence", label = "4. Нарезка тишины"},
+    {key = "5_subtitles",   label = "5. Субтитры"},
+    {key = "6_ai_clean",    label = "6. Очистка ИИ"},
+    {key = "7_ai_cut",      label = "7. Нарезка мусора"},
+    {key = "8_multicam",    label = "8. Мультикамера"},
+    {key = "9_zoom",        label = "9. Динамический зум"},
+    {key = "10_transitions",label = "10. Переходы"},
+    {key = "11_titles",     label = "11. Титульные карточки"},
 }
 
 local STATUS_COLORS = {
@@ -1908,12 +1995,23 @@ local function build_and_run_ui()
             config:get("working_dir"))
     end
 
-    step_runners["4_subtitles"] = function()
+    step_runners["4_cut_silence"] = function()
+        local clips = find_tagged_clips()
+        local main_clip = clips.main
+        if not main_clip then error("Основной клип не найден в медиапуле") end
+        local total_ms = get_clip_duration_ms(main_clip)
+        local fps = get_fps()
+        local keep = compute_silence_keep_segments(config:get("working_dir"), total_ms, fps)
+        rebuild_timeline(main_clip, keep, "AutoEditor_Clean", fps,
+            clips.screencast, config:get("audio_offset_ms", 0))
+    end
+
+    step_runners["5_subtitles"] = function()
         generate_subtitles(config:get("subtitle_language", "Russian"))
         export_subtitles(config:get("working_dir"), "original.srt")
     end
 
-    step_runners["5_ai_clean"] = function()
+    step_runners["6_ai_clean"] = function()
         run_ai_cleanup(
             config:working_path("original.srt"),
             config:working_path("cleaned.srt"),
@@ -1922,18 +2020,19 @@ local function build_and_run_ui()
             config:get("ai_chunk_size", 50))
     end
 
-    step_runners["6_cut"] = function()
+    step_runners["7_ai_cut"] = function()
         local clips = find_tagged_clips()
         local main_clip = clips.main
         if not main_clip then error("Основной клип не найден в медиапуле") end
         local total_ms = get_clip_duration_ms(main_clip)
         local fps = get_fps()
-        local keep = compute_keep_segments(config:get("working_dir"), total_ms, fps)
-        rebuild_timeline(main_clip, keep, config:get("timeline_name", "AutoEditor_Final"), fps,
+        local keep = compute_ai_keep_segments(config:get("working_dir"), total_ms, fps)
+        rebuild_timeline(main_clip, keep,
+            config:get("timeline_name", "AutoEditor_Final"), fps,
             clips.screencast, config:get("audio_offset_ms", 0))
     end
 
-    step_runners["7_multicam"] = function()
+    step_runners["8_multicam"] = function()
         local clips = find_tagged_clips()
         if not clips.screencast then
             get_logger():info("Скринкаст отсутствует — пропускаем мультикамеру"); return
@@ -1951,11 +2050,11 @@ local function build_and_run_ui()
             config:get("audio_offset_ms", 0))
     end
 
-    step_runners["8_zoom"] = function()
+    step_runners["9_zoom"] = function()
         apply_dynamic_zoom(config:get("zoom_min", 1.0), config:get("zoom_max", 1.3))
     end
 
-    step_runners["9_transitions"] = function()
+    step_runners["10_transitions"] = function()
         local tr_path = config:get("transition_video_path")
         if not tr_path or tr_path == "" then
             get_logger():info("Видео перехода не указано — пропускаем"); return
@@ -1964,7 +2063,7 @@ local function build_and_run_ui()
         apply_transitions(tr_clip, get_fps())
     end
 
-    step_runners["10_titles"] = function()
+    step_runners["11_titles"] = function()
         local wd = config:get("working_dir")
         local cleaned = config:working_path("cleaned.srt")
         local original = config:working_path("original.srt")

@@ -16,13 +16,14 @@ STEPS = [
     ("1_import",      "1. Импорт медиа",           "run_step_1"),
     ("2_sync",        "2. Синхронизация аудио",     "run_step_2"),
     ("3_silence",     "3. Обнаружение тишины",      "run_step_3"),
-    ("4_subtitles",   "4. Генерация субтитров",     "run_step_4"),
-    ("5_ai_clean",    "5. Очистка ИИ",              "run_step_5"),
-    ("6_cut",         "6. Нарезка фрагментов",      "run_step_6"),
-    ("7_multicam",    "7. Мультикамера",             "run_step_7"),
-    ("8_zoom",        "8. Динамический зум",         "run_step_8"),
-    ("9_transitions", "9. Переходы",                "run_step_9"),
-    ("10_titles",     "10. Титульные карточки",      "run_step_10"),
+    ("4_cut_silence", "4. Нарезка тишины",          "run_step_4"),
+    ("5_subtitles",   "5. Субтитры",                "run_step_5"),
+    ("6_ai_clean",    "6. Очистка ИИ",              "run_step_6"),
+    ("7_ai_cut",      "7. Нарезка мусора",          "run_step_7"),
+    ("8_multicam",    "8. Мультикамера",             "run_step_8"),
+    ("9_zoom",        "9. Динамический зум",         "run_step_9"),
+    ("10_transitions","10. Переходы",                "run_step_10"),
+    ("11_titles",     "11. Титульные карточки",      "run_step_11"),
 ]
 
 STATUS_COLORS = {
@@ -404,26 +405,9 @@ class AutoEditorWindow:
             working_dir=c.get("working_dir"),
         )
 
-    def _runner_4_subtitles(self):
-        from core.subtitle_manager import generate_subtitles, export_subtitles
-        c = self.config
-        generate_subtitles(c.get("subtitle_language", "Russian"))
-        export_subtitles(c.get("working_dir"), "original.srt")
-
-    def _runner_5_ai_clean(self):
-        from core.ai_processor import run_ai_cleanup
-        c = self.config
-        run_ai_cleanup(
-            srt_path=c.working_path("original.srt"),
-            output_path=c.working_path("cleaned.srt"),
-            api_key=c.get("openrouter_api_key"),
-            model=c.get("openrouter_model"),
-            chunk_size=c.get("ai_chunk_size", 50),
-        )
-
-    def _runner_6_cut(self):
+    def _runner_4_cut_silence(self):
         from core.media_loader import find_tagged_clips
-        from core.fragment_cutter import compute_keep_segments, rebuild_timeline
+        from core.fragment_cutter import compute_silence_keep_segments, rebuild_timeline
         from core.resolve_api import get_clip_duration_ms, get_fps
 
         c = self.config
@@ -434,14 +418,51 @@ class AutoEditorWindow:
 
         total_ms = get_clip_duration_ms(main_clip)
         fps = get_fps()
-        keep = compute_keep_segments(c.get("working_dir"), total_ms, fps)
+        keep = compute_silence_keep_segments(c.get("working_dir"), total_ms, fps)
+        rebuild_timeline(
+            main_clip, keep, "AutoEditor_Clean", fps,
+            screencast_clip=clips.get("screencast"),
+            audio_offset_ms=c.get("audio_offset_ms", 0),
+        )
+
+    def _runner_5_subtitles(self):
+        from core.subtitle_manager import generate_subtitles, export_subtitles
+        c = self.config
+        generate_subtitles(c.get("subtitle_language", "Russian"))
+        export_subtitles(c.get("working_dir"), "original.srt")
+
+    def _runner_6_ai_clean(self):
+        from core.ai_processor import run_ai_cleanup
+        c = self.config
+        run_ai_cleanup(
+            srt_path=c.working_path("original.srt"),
+            output_path=c.working_path("cleaned.srt"),
+            api_key=c.get("openrouter_api_key"),
+            model=c.get("openrouter_model"),
+            chunk_size=c.get("ai_chunk_size", 50),
+        )
+
+    def _runner_7_ai_cut(self):
+        from core.media_loader import find_tagged_clips
+        from core.fragment_cutter import compute_ai_keep_segments, rebuild_timeline
+        from core.resolve_api import get_clip_duration_ms, get_fps
+
+        c = self.config
+        clips = find_tagged_clips()
+        main_clip = clips.get("main")
+        if not main_clip:
+            raise RuntimeError("Основной клип не найден в медиапуле")
+
+        total_ms = get_clip_duration_ms(main_clip)
+        fps = get_fps()
+        keep = compute_ai_keep_segments(c.get("working_dir"), total_ms, fps)
         rebuild_timeline(
             main_clip, keep, c.get("timeline_name", "AutoEditor_Final"), fps,
             screencast_clip=clips.get("screencast"),
             audio_offset_ms=c.get("audio_offset_ms", 0),
         )
 
-    def _runner_7_multicam(self):
+    def _runner_8_multicam(self):
         from core.media_loader import find_tagged_clips
         from core.multicam import distribute_multicam, auto_switch_intervals
         from core.fragment_cutter import load_keep_segments
@@ -467,12 +488,12 @@ class AutoEditorWindow:
             audio_offset_ms=c.get("audio_offset_ms", 0),
         )
 
-    def _runner_8_zoom(self):
+    def _runner_9_zoom(self):
         from core.zoom_animator import apply_dynamic_zoom
         c = self.config
         apply_dynamic_zoom(c.get("zoom_min", 1.0), c.get("zoom_max", 1.3))
 
-    def _runner_9_transitions(self):
+    def _runner_10_transitions(self):
         from core.transition_overlay import import_transition_video, apply_transitions
         from core.resolve_api import get_fps
         c = self.config
@@ -483,13 +504,12 @@ class AutoEditorWindow:
         tr_clip = import_transition_video(tr_path)
         apply_transitions(tr_clip, get_fps())
 
-    def _runner_10_titles(self):
+    def _runner_11_titles(self):
         from core.title_cards import create_chapter_titles, detect_chapters_from_subtitles
         from core.resolve_api import get_fps
         c = self.config
         wd = c.get("working_dir")
 
-        # Автоматическое определение глав из очищенных субтитров
         cleaned_srt = c.working_path("cleaned.srt")
         original_srt = c.working_path("original.srt")
         srt_to_use = cleaned_srt if os.path.exists(cleaned_srt) else original_srt
